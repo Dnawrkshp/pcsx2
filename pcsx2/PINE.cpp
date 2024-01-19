@@ -234,7 +234,7 @@ void PINEServer::MainLoop()
 			if (tmp_length <= 0)
 			{
 				receive_length = 0;
-				ExitProcess(0);
+				exit(0);
 				if (StartSocket() < 0)
 					return;
 				break;
@@ -268,7 +268,7 @@ void PINEServer::MainLoop()
 			// if we cannot send back our answer restart the socket
 			if (write_portable(m_msgsock, res.buffer.data(), res.size) < 0)
 			{
-				ExitProcess(0);
+				exit(0);
 				if (StartSocket() < 0)
 					return;
 			}
