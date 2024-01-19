@@ -1,19 +1,5 @@
-/*  PCSX2 - PS2 Emulator for PCs
- *  Copyright (C) 2002-2023  PCSX2 Dev Team
- *
- *  PCSX2 is free software: you can redistribute it and/or modify it under the terms
- *  of the GNU Lesser General Public License as published by the Free Software Found-
- *  ation, either version 3 of the License, or (at your option) any later version.
- *
- *  PCSX2 is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY;
- *  without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR
- *  PURPOSE.  See the GNU General Public License for more details.
- *
- *  You should have received a copy of the GNU General Public License along with PCSX2.
- *  If not, see <http://www.gnu.org/licenses/>.
- */
-
-#include "PrecompiledHeader.h"
+// SPDX-FileCopyrightText: 2002-2023 PCSX2 Dev Team
+// SPDX-License-Identifier: LGPL-3.0+
 
 #include "Achievements.h"
 #include "CDVD/CDVD.h"
@@ -72,7 +58,7 @@ static void PreLoadPrep()
 	// clear protected pages, since we don't want to fault loading EE memory
 	mmap_ResetBlockTracking();
 
-	SysClearExecutionCache();
+	VMManager::Internal::ClearCPUExecutionCaches();
 }
 
 static void PostLoadPrep()
@@ -131,7 +117,7 @@ bool SaveStateBase::FreezeTag(const char* src)
 		return false;
 
 	char tagspace[32];
-	pxAssertDev(std::strlen(src) < (sizeof(tagspace) - 1), "Tag name exceeds the allowed length");
+	pxAssertMsg(std::strlen(src) < (sizeof(tagspace) - 1), "Tag name exceeds the allowed length");
 
 	std::memset(tagspace, 0, sizeof(tagspace));
 	StringUtil::Strlcpy(tagspace, src, sizeof(tagspace));
@@ -166,11 +152,10 @@ bool SaveStateBase::FreezeBios()
 
 	if (bioscheck != BiosChecksum)
 	{
-		Console.Newline();
-		Console.Indent(1).Error( "Warning: BIOS Version Mismatch, savestate may be unstable!" );
-		Console.Indent(2).Error(
-			"Current BIOS:   %s (crc=0x%08x)\n"
-			"Savestate BIOS: %s (crc=0x%08x)\n",
+		Console.Error("\n  Warning: BIOS Version Mismatch, savestate may be unstable!");
+		Console.Error(
+			"    Current BIOS:   %s (crc=0x%08x)\n"
+			"    Savestate BIOS: %s (crc=0x%08x)\n",
 			BiosDescription.c_str(), BiosChecksum,
 			biosdesc, bioscheck
 		);
@@ -369,7 +354,7 @@ static bool SysState_ComponentFreezeIn(zip_file_t* zf, SysState_Component comp)
 	if (comp.freeze(FreezeAction::Size, &fP) != 0)
 		fP.size = 0;
 
-	Console.Indent().WriteLn("Loading %s", comp.name);
+	Console.WriteLn("  Loading %s", comp.name);
 
 	std::unique_ptr<u8[]> data;
 	if (fP.size > 0)
@@ -408,7 +393,7 @@ static bool SysState_ComponentFreezeOut(SaveStateBase& writer, SysState_Componen
 	const int size = fP.size;
 	writer.PrepBlock(size);
 
-	Console.Indent().WriteLn("Saving %s", comp.name);
+	Console.WriteLn("  Saving %s", comp.name);
 
 	fP.data = writer.GetBlockPtr();
 	if (comp.freeze(FreezeAction::Save, &fP) != 0)
@@ -529,7 +514,6 @@ public:
 
 	virtual bool FreezeIn(zip_file_t* zf) const override
 	{
-		SysClearExecutionCache();
 		return MemorySavestateEntry::FreezeIn(zf);
 	}
 };

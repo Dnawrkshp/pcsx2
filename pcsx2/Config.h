@@ -1,26 +1,28 @@
-/*  PCSX2 - PS2 Emulator for PCs
- *  Copyright (C) 2002-2023  PCSX2 Dev Team
- *
- *  PCSX2 is free software: you can redistribute it and/or modify it under the terms
- *  of the GNU Lesser General Public License as published by the Free Software Found-
- *  ation, either version 3 of the License, or (at your option) any later version.
- *
- *  PCSX2 is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY;
- *  without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR
- *  PURPOSE.  See the GNU General Public License for more details.
- *
- *  You should have received a copy of the GNU General Public License along with PCSX2.
- *  If not, see <http://www.gnu.org/licenses/>.
- */
+// SPDX-FileCopyrightText: 2002-2023 PCSX2 Dev Team
+// SPDX-License-Identifier: LGPL-3.0+
 
 #pragma once
 
-#include "common/emitter/tools.h"
-#include "common/General.h"
+#include "common/Pcsx2Defs.h"
+#include "common/FPControl.h"
 #include <array>
 #include <string>
 #include <optional>
 #include <vector>
+
+// Macro used for removing some of the redtape involved in defining bitfield/union helpers.
+//
+#define BITFIELD32() \
+	union \
+	{ \
+		u32 bitset; \
+		struct \
+		{
+#define BITFIELD_END \
+	} \
+	; \
+	} \
+	;
 
 class SettingsInterface;
 class SettingsWrapper;
@@ -151,7 +153,6 @@ enum GamefixId
 	GamefixId_FIRST = 0,
 
 	Fix_FpuMultiply = GamefixId_FIRST,
-	Fix_FpuNegDiv,
 	Fix_GoemonTlbMiss,
 	Fix_SoftwareRendererFMV,
 	Fix_SkipMpeg,
@@ -388,20 +389,6 @@ enum class GSHalfPixelOffset : u8
 	MaxCount
 };
 
-// Template function for casting enumerations to their underlying type
-template <typename Enumeration>
-typename std::underlying_type<Enumeration>::type enum_cast(Enumeration E)
-{
-	return static_cast<typename std::underlying_type<Enumeration>::type>(E);
-}
-
-ImplementEnumOperators(GamefixId);
-
-//------------ DEFAULT sseMXCSR VALUES ---------------
-#define DEFAULT_sseMXCSR 0xffc0 //FPU rounding > DaZ, FtZ, "chop"
-#define DEFAULT_sseVUMXCSR 0xffc0 //VU  rounding > DaZ, FtZ, "chop"
-#define SYSTEM_sseMXCSR 0x1f80
-
 // --------------------------------------------------------------------------------------
 //  TraceFiltersEE
 // --------------------------------------------------------------------------------------
@@ -415,20 +402,10 @@ struct TraceFiltersEE
 		m_EnableEvents : 1; // Enables logging of event-driven activity -- counters, DMAs, etc.
 	BITFIELD_END
 
-	TraceFiltersEE()
-	{
-		bitset = 0;
-	}
+	TraceFiltersEE();
 
-	bool operator==(const TraceFiltersEE& right) const
-	{
-		return OpEqu(bitset);
-	}
-
-	bool operator!=(const TraceFiltersEE& right) const
-	{
-		return !this->operator==(right);
-	}
+	bool operator==(const TraceFiltersEE& right) const;
+	bool operator!=(const TraceFiltersEE& right) const;
 };
 
 // --------------------------------------------------------------------------------------
@@ -444,20 +421,10 @@ struct TraceFiltersIOP
 		m_EnableEvents : 1; // Enables logging of event-driven activity -- counters, DMAs, etc.
 	BITFIELD_END
 
-	TraceFiltersIOP()
-	{
-		bitset = 0;
-	}
+	TraceFiltersIOP();
 
-	bool operator==(const TraceFiltersIOP& right) const
-	{
-		return OpEqu(bitset);
-	}
-
-	bool operator!=(const TraceFiltersIOP& right) const
-	{
-		return !this->operator==(right);
-	}
+	bool operator==(const TraceFiltersIOP& right) const;
+	bool operator!=(const TraceFiltersIOP& right) const;
 };
 
 // --------------------------------------------------------------------------------------
@@ -476,22 +443,12 @@ struct TraceLogFilters
 	TraceFiltersEE EE;
 	TraceFiltersIOP IOP;
 
-	TraceLogFilters()
-	{
-		Enabled = false;
-	}
+	TraceLogFilters();
 
 	void LoadSave(SettingsWrapper& ini);
 
-	bool operator==(const TraceLogFilters& right) const
-	{
-		return OpEqu(Enabled) && OpEqu(EE) && OpEqu(IOP);
-	}
-
-	bool operator!=(const TraceLogFilters& right) const
-	{
-		return !this->operator==(right);
-	}
+	bool operator==(const TraceLogFilters& right) const;
+	bool operator!=(const TraceLogFilters& right) const;
 };
 
 // --------------------------------------------------------------------------------------
@@ -519,21 +476,11 @@ struct Pcsx2Config
 		BITFIELD_END
 
 		// Default is Disabled, with all recs enabled underneath.
-		ProfilerOptions()
-			: bitset(0xfffffffe)
-		{
-		}
+		ProfilerOptions();
 		void LoadSave(SettingsWrapper& wrap);
 
-		bool operator==(const ProfilerOptions& right) const
-		{
-			return OpEqu(bitset);
-		}
-
-		bool operator!=(const ProfilerOptions& right) const
-		{
-			return !OpEqu(bitset);
-		}
+		bool operator==(const ProfilerOptions& right) const;
+		bool operator!=(const ProfilerOptions& right) const;
 	};
 
 	// ------------------------------------------------------------------------
@@ -576,32 +523,13 @@ struct Pcsx2Config
 
 		void LoadSave(SettingsWrapper& wrap);
 
-		bool operator==(const RecompilerOptions& right) const
-		{
-			return OpEqu(bitset);
-		}
+		bool operator==(const RecompilerOptions& right) const;
+		bool operator!=(const RecompilerOptions& right) const;
 
-		bool operator!=(const RecompilerOptions& right) const
-		{
-			return !OpEqu(bitset);
-		}
+		u32 GetEEClampMode() const;
+		void SetEEClampMode(u32 value);
 
-		u32 GetEEClampMode() const
-		{
-			return fpuFullMode ? 3 : (fpuExtraOverflow ? 2 : (fpuOverflow ? 1 : 0));
-		}
-
-		void SetEEClampMode(u32 value)
-		{
-			fpuOverflow = (value >= 1);
-			fpuExtraOverflow = (value >= 2);
-			fpuFullMode = (value >= 3);
-		}
-
-		u32 GetVUClampMode() const
-		{
-			return vu0SignOverflow ? 3 : (vu0ExtraOverflow ? 2 : (vu0Overflow ? 1 : 0));
-		}
+		u32 GetVUClampMode() const;
 	};
 
 	// ------------------------------------------------------------------------
@@ -609,9 +537,10 @@ struct Pcsx2Config
 	{
 		RecompilerOptions Recompiler;
 
-		SSE_MXCSR sseMXCSR;
-		SSE_MXCSR sseVU0MXCSR;
-		SSE_MXCSR sseVU1MXCSR;
+		FPControlRegister FPUFPCR;
+		FPControlRegister FPUDivFPCR;
+		FPControlRegister VU0FPCR;
+		FPControlRegister VU1FPCR;
 
 		u32 AffinityControlMode;
 
@@ -621,15 +550,8 @@ struct Pcsx2Config
 
 		bool CpusChanged(const CpuOptions& right) const;
 
-		bool operator==(const CpuOptions& right) const
-		{
-			return OpEqu(sseMXCSR) && OpEqu(sseVU0MXCSR) && OpEqu(sseVU1MXCSR) && OpEqu(AffinityControlMode) && OpEqu(Recompiler);
-		}
-
-		bool operator!=(const CpuOptions& right) const
-		{
-			return !this->operator==(right);
-		}
+		bool operator==(const CpuOptions& right) const;
+		bool operator!=(const CpuOptions& right) const;
 	};
 
 	// ------------------------------------------------------------------------
@@ -902,31 +824,8 @@ struct Pcsx2Config
 
 		void LoadSave(SettingsWrapper& wrap);
 
-		bool operator==(const SPU2Options& right) const
-		{
-			return OpEqu(bitset) &&
-
-				OpEqu(SynchMode) &&
-
-				OpEqu(FinalVolume) &&
-				OpEqu(Latency) &&
-				OpEqu(OutputLatency) &&
-				OpEqu(SpeakerConfiguration) &&
-				OpEqu(DplDecodingLevel) &&
-
-				OpEqu(SequenceLenMS) &&
-				OpEqu(SeekWindowMS) &&
-				OpEqu(OverlapMS) &&
-
-				OpEqu(OutputModule) &&
-				OpEqu(BackendName) &&
-				OpEqu(DeviceName);
-		}
-
-		bool operator!=(const SPU2Options& right) const
-		{
-			return !this->operator==(right);
-		}
+		bool operator==(const SPU2Options& right) const;
+		bool operator!=(const SPU2Options& right) const;
 	};
 
 	struct DEV9Options
@@ -956,18 +855,8 @@ struct Pcsx2Config
 			u8 Address[4]{};
 			bool Enabled;
 
-			bool operator==(const HostEntry& right) const
-			{
-				return OpEqu(Url) &&
-					   OpEqu(Desc) &&
-					   (*(int*)Address == *(int*)right.Address) &&
-					   OpEqu(Enabled);
-			}
-
-			bool operator!=(const HostEntry& right) const
-			{
-				return !this->operator==(right);
-			}
+			bool operator==(const HostEntry& right) const;
+			bool operator!=(const HostEntry& right) const;
 		};
 
 		bool EthEnable{false};
@@ -995,34 +884,8 @@ struct Pcsx2Config
 
 		void LoadSave(SettingsWrapper& wrap);
 
-		bool operator==(const DEV9Options& right) const
-		{
-			return OpEqu(EthEnable) &&
-				   OpEqu(EthApi) &&
-				   OpEqu(EthDevice) &&
-				   OpEqu(EthLogDNS) &&
-
-				   OpEqu(InterceptDHCP) &&
-				   (*(int*)PS2IP == *(int*)right.PS2IP) &&
-				   (*(int*)Gateway == *(int*)right.Gateway) &&
-				   (*(int*)DNS1 == *(int*)right.DNS1) &&
-				   (*(int*)DNS2 == *(int*)right.DNS2) &&
-
-				   OpEqu(AutoMask) &&
-				   OpEqu(AutoGateway) &&
-				   OpEqu(ModeDNS1) &&
-				   OpEqu(ModeDNS2) &&
-
-				   OpEqu(EthHosts) &&
-
-				   OpEqu(HddEnable) &&
-				   OpEqu(HddFile);
-		}
-
-		bool operator!=(const DEV9Options& right) const
-		{
-			return !this->operator==(right);
-		}
+		bool operator==(const DEV9Options& right) const;
+		bool operator!=(const DEV9Options& right) const;
 
 	protected:
 		static void LoadIPHelper(u8* field, const std::string& setting);
@@ -1036,7 +899,6 @@ struct Pcsx2Config
 		BITFIELD32()
 		bool
 			FpuMulHack : 1, // Tales of Destiny hangs.
-			FpuNegDivHack : 1, // Gundam games messed up camera-view.
 			GoemonTlbHack : 1, // Gomeon tlb miss hack. The game need to access unmapped virtual address. Instead to handle it as exception, tlb are preloaded at startup
 			SoftwareRendererFMVHack : 1, // Switches to software renderer for FMVs
 			SkipMPEGHack : 1, // Skips MPEG videos (Katamari and other games need this)
@@ -1060,19 +922,14 @@ struct Pcsx2Config
 		void LoadSave(SettingsWrapper& wrap);
 		GamefixOptions& DisableAll();
 
+		static const char* GetGameFixName(GamefixId id);
+
 		bool Get(GamefixId id) const;
 		void Set(GamefixId id, bool enabled = true);
 		void Clear(GamefixId id) { Set(id, false); }
 
-		bool operator==(const GamefixOptions& right) const
-		{
-			return OpEqu(bitset);
-		}
-
-		bool operator!=(const GamefixOptions& right) const
-		{
-			return !OpEqu(bitset);
-		}
+		bool operator==(const GamefixOptions& right) const;
+		bool operator!=(const GamefixOptions& right) const;
 	};
 
 	// ------------------------------------------------------------------------
@@ -1126,15 +983,8 @@ struct Pcsx2Config
 		DebugOptions();
 		void LoadSave(SettingsWrapper& wrap);
 
-		bool operator==(const DebugOptions& right) const
-		{
-			return OpEqu(bitset) && OpEqu(FontWidth) && OpEqu(FontHeight) && OpEqu(WindowWidth) && OpEqu(WindowHeight) && OpEqu(MemoryViewBytesPerRow);
-		}
-
-		bool operator!=(const DebugOptions& right) const
-		{
-			return !this->operator==(right);
-		}
+		bool operator==(const DebugOptions& right) const;
+		bool operator!=(const DebugOptions& right) const;
 	};
 
 	// ------------------------------------------------------------------------
@@ -1166,15 +1016,8 @@ struct Pcsx2Config
 		FilenameOptions();
 		void LoadSave(SettingsWrapper& wrap);
 
-		bool operator==(const FilenameOptions& right) const
-		{
-			return OpEqu(Bios);
-		}
-
-		bool operator!=(const FilenameOptions& right) const
-		{
-			return !this->operator==(right);
-		}
+		bool operator==(const FilenameOptions& right) const;
+		bool operator!=(const FilenameOptions& right) const;
 	};
 
 	// ------------------------------------------------------------------------
@@ -1381,6 +1224,7 @@ namespace EmuFolders
 	extern std::string Cheats;
 	extern std::string Patches;
 	extern std::string Resources;
+	extern std::string UserResources;
 	extern std::string Cache;
 	extern std::string Covers;
 	extern std::string GameSettings;
@@ -1397,7 +1241,10 @@ namespace EmuFolders
 	bool EnsureFoldersExist();
 
 	/// Opens the specified log file for writing.
-	std::FILE* OpenLogFile(const std::string_view& name, const char* mode);
+	std::FILE* OpenLogFile(std::string_view name, const char* mode);
+
+	/// Returns the path to a resource file, allowing the user to override it.
+	std::string GetOverridableResourcePath(std::string_view name);
 } // namespace EmuFolders
 
 /////////////////////////////////////////////////////////////////////////////////////////
@@ -1416,7 +1263,6 @@ namespace EmuFolders
 //------------ SPECIAL GAME FIXES!!! ---------------
 #define CHECK_VUADDSUBHACK (EmuConfig.Gamefixes.VuAddSubHack) // Special Fix for Tri-ace games, they use an encryption algorithm that requires VU addi opcode to be bit-accurate.
 #define CHECK_FPUMULHACK (EmuConfig.Gamefixes.FpuMulHack) // Special Fix for Tales of Destiny hangs.
-#define CHECK_FPUNEGDIVHACK (EmuConfig.Gamefixes.FpuNegDivHack) // Special Fix for Gundam games messed up camera-view.
 #define CHECK_XGKICKHACK (EmuConfig.Gamefixes.XgKickHack) // Special Fix for Erementar Gerad, adds more delay to VU XGkick instructions. Corrects the color of some graphics.
 #define CHECK_EETIMINGHACK (EmuConfig.Gamefixes.EETimingHack) // Fix all scheduled events to happen in 1 cycle.
 #define CHECK_INSTANTDMAHACK (EmuConfig.Gamefixes.InstantDMAHack) // Attempt to finish DMA's instantly, useful for games which rely on cache emulation.
@@ -1472,3 +1318,6 @@ namespace EmuFolders
 // Change to 1 for console logs of SIF, GPU (PS1 mode) and MDEC (PS1 mode).
 // These do spam a lot though!
 #define PSX_EXTRALOGS 0
+
+#undef BITFIELD32
+#undef BITFIELD_END

@@ -230,7 +230,7 @@ protected:
 	{
 		const bool res = ((command_len + command_size) > buf_size ||
 					(reply_len + reply_size) >= MAX_IPC_RETURN_SIZE);
-		if (unlikely(res))
+		if (res) [[unlikely]]
 			return false;
 		return true;
 	}

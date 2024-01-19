@@ -56,6 +56,13 @@ oprofile_data/
 /UpgradeLog*.htm
 /.vscode*
 
+# Jetbrains Rider
+/.idea*
+
+# KDevelop 4 Workspace Configuration Files
+*.kdev4
+/.kdev4*
+
 /bin/**/*.dll
 /bin/**/*.dmp
 /bin/**/*.exp
@@ -67,6 +74,7 @@ oprofile_data/
 /bin/bios
 /bin/cache
 /bin/cheats
+/bin/patches
 /bin/covers
 /bin/dumps
 /bin/gamesettings
@@ -80,6 +88,18 @@ oprofile_data/
 /bin/textures
 /bin/translations
 /bin/inputprofiles
+/bin/videos
+/bin/portable.ini
+
+# Manually added by user.
+/bin/resources/patches.zip
+
+# Resources that are runtime downloaded.
+/bin/resources/fonts/NotoSansJP-Regular.ttf
+/bin/resources/fonts/NotoSansKR-Regular.ttf
+/bin/resources/fonts/NotoSansSC-Regular.ttf
+/bin/resources/fonts/NotoSansTC-Regular.ttf
+
 /deps
 /ipch
 

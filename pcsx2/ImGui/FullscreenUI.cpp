@@ -1,19 +1,5 @@
-/*  PCSX2 - PS2 Emulator for PCs
- *  Copyright (C) 2002-2023 PCSX2 Dev Team
- *
- *  PCSX2 is free software: you can redistribute it and/or modify it under the terms
- *  of the GNU Lesser General Public License as published by the Free Software Found-
- *  ation, either version 3 of the License, or (at your option) any later version.
- *
- *  PCSX2 is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY;
- *  without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR
- *  PURPOSE.  See the GNU General Public License for more details.
- *
- *  You should have received a copy of the GNU General Public License along with PCSX2.
- *  If not, see <http://www.gnu.org/licenses/>.
- */
-
-#include "PrecompiledHeader.h"
+// SPDX-FileCopyrightText: 2002-2023 PCSX2 Dev Team
+// SPDX-License-Identifier: LGPL-3.0+
 
 #define IMGUI_DEFINE_MATH_OPERATORS
 
@@ -31,7 +17,7 @@
 #include "Input/InputManager.h"
 #include "MTGS.h"
 #include "Patch.h"
-#include "SysForwardDefs.h"
+#include "SupportURLs.h"
 #include "USB/USB.h"
 #include "VMManager.h"
 #include "ps2/BiosTools.h"
@@ -305,7 +291,6 @@ namespace FullscreenUI
 	static void DrawGraphicsSettingsPage();
 	static void DrawAudioSettingsPage();
 	static void DrawMemoryCardSettingsPage();
-	static void DrawCreateMemoryCardWindow();
 	static void DrawControllerSettingsPage();
 	static void DrawHotkeySettingsPage();
 	static void DrawAchievementsSettingsPage(std::unique_lock<std::mutex>& settings_lock);
@@ -1004,7 +989,7 @@ void FullscreenUI::DoChangeDiscFromFile()
 		{
 			if (!VMManager::IsDiscFileName(path))
 			{
-				ShowToast({}, fmt::format(FSUI_FSTR("{} is not a valid disc image."), FileSystem::GetDisplayNameFromPath(path)));
+				ShowToast({}, fmt::format(FSUI_FSTR("{} is not a valid disc image."), Path::GetFileName(path)));
 			}
 			else
 			{
@@ -2428,9 +2413,9 @@ void FullscreenUI::PopulatePatchesAndCheatsList(const std::string_view& serial, 
 		std::sort(list.begin(), list.end(), [](const Patch::PatchInfo& lhs, const Patch::PatchInfo& rhs) { return lhs.name < rhs.name; });
 	};
 
-	s_game_patch_list = Patch::GetPatchInfo(serial, crc, false, nullptr);
+	s_game_patch_list = Patch::GetPatchInfo(serial, crc, false, true, nullptr);
 	sort_patches(s_game_patch_list);
-	s_game_cheats_list = Patch::GetPatchInfo(serial, crc, true, &s_game_cheat_unlabelled_count);
+	s_game_cheats_list = Patch::GetPatchInfo(serial, crc, true, true, &s_game_cheat_unlabelled_count);
 	sort_patches(s_game_cheats_list);
 
 	pxAssert(s_game_settings_interface);
@@ -3657,8 +3642,7 @@ void FullscreenUI::DrawMemoryCardSettingsPage()
 
 	MenuHeading(FSUI_CSTR("Settings and Operations"));
 	if (MenuButton(FSUI_ICONSTR(ICON_FA_PLUS, "Create Memory Card"), FSUI_CSTR("Creates a new memory card file or folder.")))
-		ImGui::OpenPopup("Create Memory Card");
-	DrawCreateMemoryCardWindow();
+		Host::OnCreateMemoryCardOpenRequested();
 
 	DrawFolderSetting(bsi, FSUI_ICONSTR(ICON_FA_FOLDER_OPEN, "Memory Card Directory"), "Folders", "MemoryCards", EmuFolders::MemoryCards);
 	DrawToggleSetting(bsi, FSUI_ICONSTR(ICON_FA_SEARCH, "Folder Memory Card Filter"),
@@ -3741,7 +3725,7 @@ void FullscreenUI::DrawMemoryCardSettingsPage()
 		}
 
 		if (MenuButton(SmallString::from_fmt(fmt::runtime(FSUI_ICONSTR_S(ICON_FA_EJECT, "Eject Card", "##eject_card_{}")), port),
-				FSUI_CSTR("Resets the card name for this slot."), enabled))
+				FSUI_CSTR("Removes the current card from the slot."), enabled))
 		{
 			bsi->SetStringValue("MemoryCards", file_key.c_str(), "");
 			SetSettingsChanged(bsi);
@@ -3750,95 +3734,6 @@ void FullscreenUI::DrawMemoryCardSettingsPage()
 
 
 	EndMenuButtons();
-}
-
-void FullscreenUI::DrawCreateMemoryCardWindow()
-{
-	ImGui::SetNextWindowSize(LayoutScale(700.0f, 0.0f));
-	ImGui::SetNextWindowPos(ImGui::GetIO().DisplaySize * 0.5f, ImGuiCond_Always, ImVec2(0.5f, 0.5f));
-
-	ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, LayoutScale(10.0f));
-	ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, LayoutScale(20.0f, 20.0f));
-	ImGui::PushFont(g_large_font);
-
-	bool is_open = true;
-	if (ImGui::BeginPopupModal(FSUI_CSTR("Create Memory Card"), &is_open, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize))
-	{
-		ImGui::TextWrapped("%s",
-			FSUI_CSTR("Enter the name of the memory card you wish to create, and choose a size. We recommend either using 8MB memory "
-					  "cards, or folder Memory Cards for best compatibility."));
-		ImGui::NewLine();
-
-		static char memcard_name[256] = {};
-		ImGui::TextUnformatted(FSUI_CSTR("Card Name: "));
-		ImGui::InputText("##name", memcard_name, sizeof(memcard_name));
-
-		ImGui::NewLine();
-
-		static constexpr std::tuple<const char*, MemoryCardType, MemoryCardFileType> memcard_types[] = {
-			{FSUI_NSTR("8 MB [Most Compatible]"), MemoryCardType::File, MemoryCardFileType::PS2_8MB},
-			{FSUI_NSTR("16 MB"), MemoryCardType::File, MemoryCardFileType::PS2_16MB},
-			{FSUI_NSTR("32 MB"), MemoryCardType::File, MemoryCardFileType::PS2_32MB},
-			{FSUI_NSTR("64 MB"), MemoryCardType::File, MemoryCardFileType::PS2_64MB},
-			{FSUI_NSTR("Folder [Recommended]"), MemoryCardType::Folder, MemoryCardFileType::PS2_8MB},
-			{FSUI_NSTR("128 KB [PS1]"), MemoryCardType::File, MemoryCardFileType::PS1},
-		};
-
-		static int memcard_type = 0;
-		for (int i = 0; i < static_cast<int>(std::size(memcard_types)); i++)
-			ImGui::RadioButton(Host::TranslateToCString(TR_CONTEXT, std::get<0>(memcard_types[i])), &memcard_type, i);
-
-		ImGui::NewLine();
-
-		BeginMenuButtons();
-
-		const bool create_enabled = (std::strlen(memcard_name) > 0);
-
-		if (ActiveButton(FSUI_ICONSTR(ICON_FA_FOLDER_OPEN, "Create"), false, create_enabled) && std::strlen(memcard_name) > 0)
-		{
-			const std::string real_card_name =
-				fmt::format("{}.{}", memcard_name, (std::get<2>(memcard_types[memcard_type]) == MemoryCardFileType::PS1 ? "mcr" : "ps2"));
-			if (!Path::IsValidFileName(real_card_name, false))
-			{
-				ShowToast(std::string(), fmt::format(FSUI_FSTR("Memory card name '{}' is not valid."), real_card_name));
-			}
-			else if (!FileMcd_GetCardInfo(real_card_name).has_value())
-			{
-				const auto& [type_title, type, file_type] = memcard_types[memcard_type];
-				if (FileMcd_CreateNewCard(real_card_name, type, file_type))
-				{
-					ShowToast(std::string(), fmt::format(FSUI_FSTR("Memory Card '{}' created."), real_card_name));
-
-					std::memset(memcard_name, 0, sizeof(memcard_name));
-					memcard_type = 0;
-					ImGui::CloseCurrentPopup();
-				}
-				else
-				{
-					ShowToast(std::string(), fmt::format(FSUI_FSTR("Failed to create memory card '{}'."), real_card_name));
-				}
-			}
-			else
-			{
-				ShowToast(std::string(), fmt::format(FSUI_FSTR("A memory card with the name '{}' already exists."), real_card_name));
-			}
-		}
-
-		if (ActiveButton(FSUI_ICONSTR(ICON_FA_TIMES, "Cancel"), false))
-		{
-			std::memset(memcard_name, 0, sizeof(memcard_name));
-			memcard_type = 0;
-
-			ImGui::CloseCurrentPopup();
-		}
-
-		EndMenuButtons();
-
-		ImGui::EndPopup();
-	}
-
-	ImGui::PopFont();
-	ImGui::PopStyleVar(2);
 }
 
 void FullscreenUI::CopyGlobalControllerSettingsToGame()
@@ -4464,7 +4359,12 @@ void FullscreenUI::DrawAdvancedSettingsPage()
 
 		DrawIntListSetting(bsi, FSUI_CSTR("Rounding Mode"),
 			FSUI_CSTR("Determines how the results of floating-point operations are rounded. Some games need specific settings."),
-			"EmuCore/CPU", "FPU.Roundmode", 3, ee_rounding_mode_settings, std::size(ee_rounding_mode_settings), true);
+			"EmuCore/CPU", "FPU.Roundmode", static_cast<int>(FPRoundMode::ChopZero), ee_rounding_mode_settings,
+			std::size(ee_rounding_mode_settings), true);
+		DrawIntListSetting(bsi, FSUI_CSTR("Division Rounding Mode"),
+			FSUI_CSTR("Determines how the results of floating-point division is rounded. Some games need specific settings."),
+			"EmuCore/CPU", "FPUDiv.Roundmode", static_cast<int>(FPRoundMode::Nearest),
+			ee_rounding_mode_settings, std::size(ee_rounding_mode_settings), true);
 		DrawClampingModeSetting(bsi, FSUI_CSTR("Clamping Mode"),
 			FSUI_CSTR("Determines how out-of-range floating point numbers are handled. Some games need specific settings."), -1);
 
@@ -4484,12 +4384,14 @@ void FullscreenUI::DrawAdvancedSettingsPage()
 		MenuHeading(FSUI_CSTR("Vector Units"));
 		DrawIntListSetting(bsi, FSUI_CSTR("VU0 Rounding Mode"),
 			FSUI_CSTR("Determines how the results of floating-point operations are rounded. Some games need specific settings."),
-			"EmuCore/CPU", "VU0.Roundmode", 3, ee_rounding_mode_settings, std::size(ee_rounding_mode_settings), true);
+			"EmuCore/CPU", "VU0.Roundmode", static_cast<int>(FPRoundMode::ChopZero),
+			ee_rounding_mode_settings, std::size(ee_rounding_mode_settings), true);
 		DrawClampingModeSetting(bsi, FSUI_CSTR("VU0 Clamping Mode"),
 			FSUI_CSTR("Determines how out-of-range floating point numbers are handled. Some games need specific settings."), 0);
 		DrawIntListSetting(bsi, FSUI_CSTR("VU1 Rounding Mode"),
 			FSUI_CSTR("Determines how the results of floating-point operations are rounded. Some games need specific settings."),
-			"EmuCore/CPU", "VU1.Roundmode", 3, ee_rounding_mode_settings, std::size(ee_rounding_mode_settings), true);
+			"EmuCore/CPU", "VU1.Roundmode", static_cast<int>(FPRoundMode::ChopZero),
+			ee_rounding_mode_settings, std::size(ee_rounding_mode_settings), true);
 		DrawClampingModeSetting(bsi, FSUI_CSTR("VU1 Clamping Mode"),
 			FSUI_CSTR("Determines how out-of-range floating point numbers are handled. Some games need specific settings."), 1);
 		DrawToggleSetting(bsi, FSUI_CSTR("Enable VU0 Recompiler (Micro Mode)"),
@@ -4609,7 +4511,6 @@ void FullscreenUI::DrawGameFixesSettingsPage()
 		FSUI_CSTR("Game fixes should not be modified unless you are aware of what each option does and the implications of doing so."),
 		false, false, ImGuiFullscreen::LAYOUT_MENU_BUTTON_HEIGHT_NO_SUMMARY);
 
-	DrawToggleSetting(bsi, FSUI_CSTR("FPU Negative Div Hack"), FSUI_CSTR("For Gundam games."), "EmuCore/Gamefixes", "FpuNegDivHack", false);
 	DrawToggleSetting(bsi, FSUI_CSTR("FPU Multiply Hack"), FSUI_CSTR("For Tales of Destiny."), "EmuCore/Gamefixes", "FpuMulHack", false);
 	DrawToggleSetting(bsi, FSUI_CSTR("Use Software Renderer For FMVs"),
 		FSUI_CSTR("Needed for some games with complex FMV rendering."), "EmuCore/Gamefixes", "SoftwareRendererFMVHack", false);
@@ -4838,7 +4739,7 @@ void FullscreenUI::DrawPauseMenu(MainWindowType type)
 					ClosePauseMenu();
 				}
 
-				if (ActiveButton(GSConfig.UseHardwareRenderer() ? (FSUI_ICONSTR(ICON_FA_PAINT_BRUSH, "Switch To Software Renderer")) :
+				if (ActiveButton(GSIsHardwareRenderer() ? (FSUI_ICONSTR(ICON_FA_PAINT_BRUSH, "Switch To Software Renderer")) :
 																  (FSUI_ICONSTR(ICON_FA_PAINT_BRUSH, "Switch To Hardware Renderer")),
 						false))
 				{
@@ -6109,7 +6010,7 @@ void FullscreenUI::DrawGameListSettingsPage(const ImVec2& heading_size)
 	{
 		DrawFolderSetting(bsi, FSUI_ICONSTR(ICON_FA_FOLDER, "Covers Directory"), "Folders", "Covers", EmuFolders::Covers);
 		if (MenuButton(
-				FSUI_ICONSTR(ICON_FA_DOWNLOAD, "Download Covers"), FSUI_CSTR("Downloads covers from a user-specified URL template.")))
+				FSUI_ICONSTR(ICON_FA_FILE_DOWNLOAD, "Download Covers"), FSUI_CSTR("Downloads covers from a user-specified URL template.")))
 		{
 			Host::OnCoverDownloaderOpenRequested();
 		}
@@ -6487,6 +6388,7 @@ void FullscreenUI::DrawAchievementsSettingsPage(std::unique_lock<std::mutex>& se
 #if 0
 // TRANSLATION-STRING-AREA-BEGIN
 TRANSLATE_NOOP("FullscreenUI", "Could not find any CD/DVD-ROM devices. Please ensure you have a drive connected and sufficient permissions to access it.");
+TRANSLATE_NOOP("FullscreenUI", "WARNING: Your memory card is still writing data. Shutting down now will IRREVERSIBLY DESTROY YOUR MEMORY CARD. It is strongly recommended to resume your game and let it finish writing to your memory card.\n\nDo you wish to shutdown anyways and IRREVERSIBLY DESTROY YOUR MEMORY CARD?");
 TRANSLATE_NOOP("FullscreenUI", "Use Global Setting");
 TRANSLATE_NOOP("FullscreenUI", "Default");
 TRANSLATE_NOOP("FullscreenUI", "Automatic binding failed, no devices are available.");
@@ -6781,13 +6683,9 @@ TRANSLATE_NOOP("FullscreenUI", "%d ms");
 TRANSLATE_NOOP("FullscreenUI", "Settings and Operations");
 TRANSLATE_NOOP("FullscreenUI", "Creates a new memory card file or folder.");
 TRANSLATE_NOOP("FullscreenUI", "Simulates a larger memory card by filtering saves only to the current game.");
-TRANSLATE_NOOP("FullscreenUI", "Automatically ejects Memory Cards when they differ after loading a state.");
 TRANSLATE_NOOP("FullscreenUI", "If not set, this card will be considered unplugged.");
 TRANSLATE_NOOP("FullscreenUI", "The selected memory card image will be used for this slot.");
-TRANSLATE_NOOP("FullscreenUI", "Resets the card name for this slot.");
-TRANSLATE_NOOP("FullscreenUI", "Create Memory Card");
-TRANSLATE_NOOP("FullscreenUI", "Enter the name of the memory card you wish to create, and choose a size. We recommend either using 8MB memory cards, or folder Memory Cards for best compatibility.");
-TRANSLATE_NOOP("FullscreenUI", "Card Name: ");
+TRANSLATE_NOOP("FullscreenUI", "Removes the current card from the slot.");
 TRANSLATE_NOOP("FullscreenUI", "Configuration");
 TRANSLATE_NOOP("FullscreenUI", "Uses game-specific settings for controllers for this game.");
 TRANSLATE_NOOP("FullscreenUI", "Copies the global controller configuration to this game.");
@@ -6828,6 +6726,8 @@ TRANSLATE_NOOP("FullscreenUI", "Logs disc reads from games.");
 TRANSLATE_NOOP("FullscreenUI", "Emotion Engine");
 TRANSLATE_NOOP("FullscreenUI", "Rounding Mode");
 TRANSLATE_NOOP("FullscreenUI", "Determines how the results of floating-point operations are rounded. Some games need specific settings.");
+TRANSLATE_NOOP("FullscreenUI", "Division Rounding Mode");
+TRANSLATE_NOOP("FullscreenUI", "Determines how the results of floating-point division is rounded. Some games need specific settings.");
 TRANSLATE_NOOP("FullscreenUI", "Clamping Mode");
 TRANSLATE_NOOP("FullscreenUI", "Determines how out-of-range floating point numbers are handled. Some games need specific settings.");
 TRANSLATE_NOOP("FullscreenUI", "Enable EE Recompiler");
@@ -6866,8 +6766,6 @@ TRANSLATE_NOOP("FullscreenUI", "Activating game patches can cause unpredictable 
 TRANSLATE_NOOP("FullscreenUI", "Use patches at your own risk, the PCSX2 team will provide no support for users who have enabled game patches.");
 TRANSLATE_NOOP("FullscreenUI", "Game Fixes");
 TRANSLATE_NOOP("FullscreenUI", "Game fixes should not be modified unless you are aware of what each option does and the implications of doing so.");
-TRANSLATE_NOOP("FullscreenUI", "FPU Negative Div Hack");
-TRANSLATE_NOOP("FullscreenUI", "For Gundam games.");
 TRANSLATE_NOOP("FullscreenUI", "FPU Multiply Hack");
 TRANSLATE_NOOP("FullscreenUI", "For Tales of Destiny.");
 TRANSLATE_NOOP("FullscreenUI", "Use Software Renderer For FMVs");
@@ -6948,10 +6846,6 @@ TRANSLATE_NOOP("FullscreenUI", "Game settings have been cleared for '{}'.");
 TRANSLATE_NOOP("FullscreenUI", "Console Port {}");
 TRANSLATE_NOOP("FullscreenUI", "{} (Current)");
 TRANSLATE_NOOP("FullscreenUI", "{} (Folder)");
-TRANSLATE_NOOP("FullscreenUI", "Memory card name '{}' is not valid.");
-TRANSLATE_NOOP("FullscreenUI", "Memory Card '{}' created.");
-TRANSLATE_NOOP("FullscreenUI", "Failed to create memory card '{}'.");
-TRANSLATE_NOOP("FullscreenUI", "A memory card with the name '{}' already exists.");
 TRANSLATE_NOOP("FullscreenUI", "Failed to load '{}'.");
 TRANSLATE_NOOP("FullscreenUI", "Input profile '{}' loaded.");
 TRANSLATE_NOOP("FullscreenUI", "Input profile '{}' saved.");
@@ -7162,12 +7056,6 @@ TRANSLATE_NOOP("FullscreenUI", "PS2 (16MB)");
 TRANSLATE_NOOP("FullscreenUI", "PS2 (32MB)");
 TRANSLATE_NOOP("FullscreenUI", "PS2 (64MB)");
 TRANSLATE_NOOP("FullscreenUI", "PS1");
-TRANSLATE_NOOP("FullscreenUI", "8 MB [Most Compatible]");
-TRANSLATE_NOOP("FullscreenUI", "16 MB");
-TRANSLATE_NOOP("FullscreenUI", "32 MB");
-TRANSLATE_NOOP("FullscreenUI", "64 MB");
-TRANSLATE_NOOP("FullscreenUI", "Folder [Recommended]");
-TRANSLATE_NOOP("FullscreenUI", "128 KB [PS1]");
 TRANSLATE_NOOP("FullscreenUI", "Negative");
 TRANSLATE_NOOP("FullscreenUI", "Positive");
 TRANSLATE_NOOP("FullscreenUI", "Chop/Zero (Default)");
@@ -7185,6 +7073,7 @@ TRANSLATE_NOOP("FullscreenUI", "Size");
 TRANSLATE_NOOP("FullscreenUI", "Frequency");
 TRANSLATE_NOOP("FullscreenUI", "Select Disc Image");
 TRANSLATE_NOOP("FullscreenUI", "Select Disc Drive");
+TRANSLATE_NOOP("FullscreenUI", "WARNING: Memory Card Busy");
 TRANSLATE_NOOP("FullscreenUI", "Start File");
 TRANSLATE_NOOP("FullscreenUI", "Start BIOS");
 TRANSLATE_NOOP("FullscreenUI", "Start Disc");
@@ -7234,13 +7123,12 @@ TRANSLATE_NOOP("FullscreenUI", "Latency");
 TRANSLATE_NOOP("FullscreenUI", "Sequence Length");
 TRANSLATE_NOOP("FullscreenUI", "Seekwindow Size");
 TRANSLATE_NOOP("FullscreenUI", "Overlap");
+TRANSLATE_NOOP("FullscreenUI", "Create Memory Card");
 TRANSLATE_NOOP("FullscreenUI", "Memory Card Directory");
 TRANSLATE_NOOP("FullscreenUI", "Folder Memory Card Filter");
-TRANSLATE_NOOP("FullscreenUI", "Auto Eject When Loading");
-TRANSLATE_NOOP("FullscreenUI", "Create");
-TRANSLATE_NOOP("FullscreenUI", "Cancel");
 TRANSLATE_NOOP("FullscreenUI", "Load Profile");
 TRANSLATE_NOOP("FullscreenUI", "Save Profile");
+TRANSLATE_NOOP("FullscreenUI", "Create");
 TRANSLATE_NOOP("FullscreenUI", "Per-Game Configuration");
 TRANSLATE_NOOP("FullscreenUI", "Copy Global Settings");
 TRANSLATE_NOOP("FullscreenUI", "Enable SDL Input Source");
@@ -7294,6 +7182,7 @@ TRANSLATE_NOOP("FullscreenUI", "Delete Save");
 TRANSLATE_NOOP("FullscreenUI", "Close Menu");
 TRANSLATE_NOOP("FullscreenUI", "Default Boot");
 TRANSLATE_NOOP("FullscreenUI", "Delete State");
+TRANSLATE_NOOP("FullscreenUI", "Cancel");
 TRANSLATE_NOOP("FullscreenUI", "Full Boot");
 TRANSLATE_NOOP("FullscreenUI", "Reset Play Time");
 TRANSLATE_NOOP("FullscreenUI", "Add Search Directory");

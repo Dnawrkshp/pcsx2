@@ -1,24 +1,14 @@
-/*  PCSX2 - PS2 Emulator for PCs
- *  Copyright (C) 2002-2021 PCSX2 Dev Team
- *
- *  PCSX2 is free software: you can redistribute it and/or modify it under the terms
- *  of the GNU Lesser General Public License as published by the Free Software Found-
- *  ation, either version 3 of the License, or (at your option) any later version.
- *
- *  PCSX2 is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY;
- *  without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR
- *  PURPOSE.  See the GNU General Public License for more details.
- *
- *  You should have received a copy of the GNU General Public License along with PCSX2.
- *  If not, see <http://www.gnu.org/licenses/>.
- */
+// SPDX-FileCopyrightText: 2002-2023 PCSX2 Dev Team
+// SPDX-License-Identifier: LGPL-3.0+
 
 #pragma once
 
 #include "GS/GSExtra.h"
 #include "GS/Renderers/SW/GSScanlineEnvironment.h"
-#include "System.h"
-#include "common/emitter/tools.h"
+
+#include "common/HostSys.h"
+
+#include <cinttypes>
 
 template <class KEY, class VALUE>
 class GSFunctionMap
@@ -92,7 +82,7 @@ public:
 			m_active->actual += actual;
 			m_active->total += total;
 
-			ASSERT(m_active->total >= m_active->actual);
+			pxAssert(m_active->total >= m_active->actual);
 		}
 	}
 
@@ -127,7 +117,7 @@ public:
 			{
 				u64 tpf = p->ticks / p->frames;
 
-				printf("%016llx | %6llu | %5llu | %5.2f%% %5.1f %6.1f | %8llu %6llu %5.2f%%\n",
+				printf("%016" PRIx64 " | %6" PRIu64 " | %5" PRIu64 " | %5.2f%% %5.1f %6.1f | %8" PRIu64 " %6" PRIu64 " %5.2f%%\n",
 					(u64)key,
 					p->frames,
 					p->prims / p->frames,
@@ -192,7 +182,7 @@ public:
 		{
 			u8* code_ptr = GSCodeReserve::ReserveMemory(MAX_SIZE);
 			CG cg(key, code_ptr, MAX_SIZE);
-			ASSERT(cg.getSize() < MAX_SIZE);
+			pxAssert(cg.getSize() < MAX_SIZE);
 
 #if 0
 			fprintf(stderr, "%s Location:%p Size:%zu Key:%llx\n", m_name.c_str(), code_ptr, cg.getSize(), (u64)key);

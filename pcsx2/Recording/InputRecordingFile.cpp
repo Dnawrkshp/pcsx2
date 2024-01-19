@@ -1,19 +1,5 @@
-/*  PCSX2 - PS2 Emulator for PCs
- *  Copyright (C) 2002-2022  PCSX2 Dev Team
- *
- *  PCSX2 is free software: you can redistribute it and/or modify it under the terms
- *  of the GNU Lesser General Public License as published by the Free Software Found-
- *  ation, either version 3 of the License, or (at your option) any later version.
- *
- *  PCSX2 is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY;
- *  without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR
- *  PURPOSE.  See the GNU General Public License for more details.
- *
- *  You should have received a copy of the GNU General Public License along with PCSX2.
- *  If not, see <http://www.gnu.org/licenses/>.
- */
-
-#include "PrecompiledHeader.h"
+// SPDX-FileCopyrightText: 2002-2023 PCSX2 Dev Team
+// SPDX-License-Identifier: LGPL-3.0+
 
 #include "InputRecordingFile.h"
 
@@ -23,7 +9,6 @@
 #include "DebugTools/Debug.h"
 #include "MemoryTypes.h"
 #include "svnrev.h"
-#include "SysForwardDefs.h"
 
 #include <fmt/format.h>
 
@@ -37,13 +22,7 @@ void InputRecordingFile::InputRecordingFileHeader::init() noexcept
 
 void InputRecordingFile::setEmulatorVersion()
 {
-	std::string emuVersion;
-	if (!PCSX2_isReleaseVersion && GIT_TAGGED_COMMIT)
-		emuVersion = fmt::format("PCSX2-Nightly-{}", GIT_TAG);
-	else
-		emuVersion = fmt::format("PCSX2-{}.{}.{}", PCSX2_VersionHi, PCSX2_VersionMid, PCSX2_VersionLo);
-
-	StringUtil::Strlcpy(m_header.m_emulatorVersion, emuVersion.c_str(), sizeof(m_header.m_emulatorVersion));
+	StringUtil::Strlcpy(m_header.m_emulatorVersion, "PCSX2-" GIT_REV, sizeof(m_header.m_emulatorVersion));
 }
 
 void InputRecordingFile::setAuthor(const std::string& _author)

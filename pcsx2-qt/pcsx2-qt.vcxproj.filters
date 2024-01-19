@@ -287,6 +287,9 @@
     <ClCompile Include="Debugger\Models\StackModel.cpp">
       <Filter>Debugger\Models</Filter>
     </ClCompile>
+    <ClCompile Include="Debugger\Models\SavedAddressesModel.cpp">
+      <Filter>Debugger\Models</Filter>
+    </ClCompile>
     <ClCompile Include="$(IntDir)Debugger\moc_CpuWidget.cpp">
       <Filter>moc</Filter>
     </ClCompile>
@@ -314,6 +317,9 @@
     <ClCompile Include="$(IntDir)Debugger\Models\moc_StackModel.cpp">
       <Filter>moc</Filter>
     </ClCompile>
+    <ClCompile Include="$(IntDir)Debugger\Models\moc_SavedAddressesModel.cpp">
+      <Filter>moc</Filter>
+    </ClCompile>
     <ClCompile Include="ColorPickerButton.cpp" />
     <ClCompile Include="$(IntDir)moc_ColorPickerButton.cpp">
       <Filter>moc</Filter>
@@ -334,6 +340,10 @@
     <ClCompile Include="Translations.cpp" />
     <ClCompile Include="SetupWizardDialog.cpp" />
     <ClCompile Include="$(IntDir)moc_SetupWizardDialog.cpp">
+      <Filter>moc</Filter>
+    </ClCompile>
+    <ClCompile Include="LogWindow.cpp" />
+    <ClCompile Include="$(IntDir)moc_LogWindow.cpp">
       <Filter>moc</Filter>
     </ClCompile>
   </ItemGroup>
@@ -482,6 +492,9 @@
     <QtMoc Include="Debugger\Models\StackModel.h">
       <Filter>Debugger\Models</Filter>
     </QtMoc>
+    <QtMoc Include="Debugger\Models\SavedAddressesModel.h">
+      <Filter>Debugger\Models</Filter>
+    </QtMoc>
     <QtMoc Include="ColorPickerButton.h" />
     <QtMoc Include="SetupWizardDialog.h" />
     <QtMoc Include="Settings\GameCheatSettingsWidget.h">
@@ -490,6 +503,7 @@
     <QtMoc Include="Settings\GamePatchSettingsWidget.h">
       <Filter>Settings</Filter>
     </QtMoc>
+    <QtMoc Include="LogWindow.h" />
   </ItemGroup>
   <ItemGroup>
     <QtResource Include="resources\resources.qrc">
@@ -636,6 +650,9 @@
   </ItemGroup>
   <ItemGroup>
     <None Include="Settings\FolderSettingsWidget.ui">
+      <Filter>Settings</Filter>
+    </None>
+    <None Include="Settings\ControllerBindingWidget_Popn.ui">
       <Filter>Settings</Filter>
     </None>
   </ItemGroup>

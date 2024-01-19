@@ -1,19 +1,5 @@
-/*  PCSX2 - PS2 Emulator for PCs
- *  Copyright (C) 2002-2023  PCSX2 Dev Team
- *
- *  PCSX2 is free software: you can redistribute it and/or modify it under the terms
- *  of the GNU Lesser General Public License as published by the Free Software Found-
- *  ation, either version 3 of the License, or (at your option) any later version.
- *
- *  PCSX2 is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY;
- *  without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR
- *  PURPOSE.  See the GNU General Public License for more details.
- *
- *  You should have received a copy of the GNU General Public License along with PCSX2.
- *  If not, see <http://www.gnu.org/licenses/>.
- */
-
-#include "PrecompiledHeader.h"
+// SPDX-FileCopyrightText: 2002-2023 PCSX2 Dev Team
+// SPDX-License-Identifier: LGPL-3.0+
 
 #include "DEV9/ATA/ATA.h"
 #include "DEV9/DEV9.h"
@@ -115,35 +101,24 @@ void ATA::HDD_SetFeatures()
 					//if mode = 1, disable IORDY
 					DevCon.WriteLn("DEV9: PIO Default");
 					pioMode = 4;
-					sdmaMode = -1;
 					mdmaMode = -1;
 					udmaMode = -1;
 					break;
 				case 0x01: //pio mode (3,4)
 					DevCon.WriteLn("DEV9: PIO Mode %i", mode);
 					pioMode = mode;
-					sdmaMode = -1;
-					mdmaMode = -1;
-					udmaMode = -1;
-					break;
-				case 0x02: //Single word dma mode (0,1,2)
-					DevCon.WriteLn("DEV9: SDMA Mode %i", mode);
-					//pioMode = -1;
-					sdmaMode = mode;
 					mdmaMode = -1;
 					udmaMode = -1;
 					break;
 				case 0x04: //Multi word dma mode (0,1,2)
 					DevCon.WriteLn("DEV9: MDMA Mode %i", mode);
 					//pioMode = -1;
-					sdmaMode = -1;
 					mdmaMode = mode;
 					udmaMode = -1;
 					break;
 				case 0x08: //Ulta dma mode (0,1,2,3,4,5,6)
 					DevCon.WriteLn("DEV9: UDMA Mode %i", mode);
 					//pioMode = -1;
-					sdmaMode = -1;
 					mdmaMode = -1;
 					udmaMode = mode;
 					break;

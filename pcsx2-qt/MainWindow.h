@@ -1,17 +1,5 @@
-/*  PCSX2 - PS2 Emulator for PCs
- *  Copyright (C) 2002-2022  PCSX2 Dev Team
- *
- *  PCSX2 is free software: you can redistribute it and/or modify it under the terms
- *  of the GNU Lesser General Public License as published by the Free Software Found-
- *  ation, either version 3 of the License, or (at your option) any later version.
- *
- *  PCSX2 is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY;
- *  without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR
- *  PURPOSE.  See the GNU General Public License for more details.
- *
- *  You should have received a copy of the GNU General Public License along with PCSX2.
- *  If not, see <http://www.gnu.org/licenses/>.
- */
+// SPDX-FileCopyrightText: 2002-2023 PCSX2 Dev Team
+// SPDX-License-Identifier: LGPL-3.0+
 
 #pragma once
 
@@ -65,6 +53,9 @@ public:
 		VMLock(VMLock&& lock);
 		VMLock(const VMLock&) = delete;
 		~VMLock();
+
+		VMLock& operator=(VMLock&& lock);
+		VMLock& operator=(const VMLock&) = delete;
 
 		/// Returns the parent widget, which can be used for any popup dialogs.
 		__fi QWidget* getDialogParent() const { return m_dialog_parent; }
@@ -167,6 +158,7 @@ private Q_SLOTS:
 	void onToolsOpenDataDirectoryTriggered();
 	void onToolsCoverDownloaderTriggered();
 	void onToolsEditCheatsPatchesTriggered(bool cheats);
+	void onCreateMemoryCardOpenRequested();
 	void updateTheme();
 	void reloadThemeSpecificImages();
 	void updateLanguage();
@@ -206,17 +198,17 @@ protected:
 	void changeEvent(QEvent* event) override;
 	void dragEnterEvent(QDragEnterEvent* event) override;
 	void dropEvent(QDropEvent* event) override;
+	void moveEvent(QMoveEvent* event) override;
+	void resizeEvent(QResizeEvent* event) override;
 
 #ifdef _WIN32
 	bool nativeEvent(const QByteArray& eventType, void* message, qintptr* result) override;
 #endif
 
 private:
-	static void setStyleFromSettings();
-	static void setIconThemeFromStyle();
-
 	void setupAdditionalUi();
 	void connectSignals();
+	void createRendererSwitchMenu();
 	void recreate();
 	void recreateSettings();
 	void destroySubWindows();
@@ -231,6 +223,7 @@ private:
 	void updateDisplayRelatedActions(bool has_surface, bool render_to_main, bool fullscreen);
 	void updateGameDependentActions();
 	void updateStatusBarWidgetVisibility();
+	void updateAdvancedSettingsVisibility();
 	void updateWindowTitle();
 	void updateWindowState(bool force_visible = false);
 	void setProgressBar(int current, int total);
@@ -300,13 +293,6 @@ private:
 	QLabel* m_status_resolution_widget = nullptr;
 
 	QMenu* m_settings_toolbar_menu = nullptr;
-
-	QString m_current_title;
-	QString m_current_elf_override;
-	QString m_current_disc_path;
-	QString m_current_disc_serial;
-	quint32 m_current_disc_crc;
-	quint32 m_current_running_crc;
 
 	bool m_display_created = false;
 	bool m_relative_mouse_mode = false;

@@ -1,33 +1,18 @@
-/*  PCSX2 - PS2 Emulator for PCs
- *  Copyright (C) 2002-2022  PCSX2 Dev Team
- *
- *  PCSX2 is free software: you can redistribute it and/or modify it under the terms
- *  of the GNU Lesser General Public License as published by the Free Software Found-
- *  ation, either version 3 of the License, or (at your option) any later version.
- *
- *  PCSX2 is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY;
- *  without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR
- *  PURPOSE.  See the GNU General Public License for more details.
- *
- *  You should have received a copy of the GNU General Public License along with PCSX2.
- *  If not, see <http://www.gnu.org/licenses/>.
- *
- *  Some of the functions in this file are based on the mpeg2dec library,
- * 
- *  Copyright (C) 2000-2002 Michel Lespinasse <walken@zoy.org>
- *  Copyright (C) 1999-2000 Aaron Holtzman <aholtzma@ess.engr.uvic.ca>
- *  Modified by Florin for PCSX2 emu
- *
- *  under the GPL license. However, they have been heavily rewritten for PCSX2 usage.
- *  The original author's copyright statement is included above for completeness sake.
- */
+// SPDX-FileCopyrightText: 2002-2023 PCSX2 Dev Team
+// SPDX-License-Identifier: GPL-2.0+
+
+// Some of the functions in this file are based on the mpeg2dec library,
+//
+// Copyright (C) 2000-2002 Michel Lespinasse <walken@zoy.org>
+// Copyright (C) 1999-2000 Aaron Holtzman <aholtzma@ess.engr.uvic.ca>
+//
+// under the GPL license. However, they have been heavily rewritten for PCSX2 usage.
+// The original author's copyright statement is included above for completeness sake.
 
 #include "IPU/IPU.h"
 #include "IPU/IPUdma.h"
 #include "IPU/yuv2rgb.h"
 #include "IPU/IPU_MultiISA.h"
-
-#include "common/General.h"
 
 // the IPU is fixed to 16 byte strides (128-bit / QWC resolution):
 static const uint decoder_stride = 16;
@@ -369,11 +354,11 @@ __ri static void IDCT_Add(const int last, s16* block, s16* dest, const int strid
 	{
 		IDCT_Block(block);
 
-		__m128 zero = _mm_setzero_ps();
+		const r128 zero = r128_zero();
 		for (int i = 0; i < 8; i++)
 		{
-			_mm_store_ps((float*)dest, _mm_load_ps((float*)block));
-			_mm_store_ps((float*)block, zero);
+			r128_store(dest, r128_load(block));
+			r128_store(block, zero);
 
 			dest += stride;
 			block += 8;
@@ -381,14 +366,12 @@ __ri static void IDCT_Add(const int last, s16* block, s16* dest, const int strid
 	}
 	else
 	{
-		s16 DC = ((int)block[0] + 4) >> 3;
-		s16 dcf[2] = {DC, DC};
+		const u16 DC = static_cast<u16>((static_cast<s32>(block[0]) + 4) >> 3);
+		const r128 dc128 = r128_from_u32_dup(static_cast<u32>(DC) | (static_cast<u32>(DC) << 16));
 		block[0] = block[63] = 0;
 
-		__m128 dc128 = _mm_set_ps1(*(float*)dcf);
-
 		for (int i = 0; i < 8; ++i)
-			_mm_store_ps((float*)(dest + (stride * i)), dc128);
+			r128_store((dest + (stride * i)), dc128);
 	}
 }
 
@@ -957,20 +940,14 @@ __ri static bool slice_intra_DCT(const int cc, u8 * const dest, const int stride
 
 __ri static bool slice_non_intra_DCT(s16 * const dest, const int stride, const bool skip)
 {
-	int last;
-
 	if (!skip)
-	{
 		std::memset(decoder.DCTblock, 0, sizeof(decoder.DCTblock));
-	}
 
+	int last = 0;
 	if (!get_non_intra_block(&last))
-	{
 		return false;
-	}
 
 	IDCT_Add(last, decoder.DCTblock, dest, stride);
-
 	return true;
 }
 

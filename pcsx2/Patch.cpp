@@ -1,19 +1,5 @@
-/*  PCSX2 - PS2 Emulator for PCs
- *  Copyright (C) 2002-2023  PCSX2 Dev Team
- *
- *  PCSX2 is free software: you can redistribute it and/or modify it under the terms
- *  of the GNU Lesser General Public License as published by the Free Software Found-
- *  ation, either version 3 of the License, or (at your option) any later version.
- *
- *  PCSX2 is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY;
- *  without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR
- *  PURPOSE.  See the GNU General Public License for more details.
- *
- *  You should have received a copy of the GNU General Public License along with PCSX2.
- *  If not, see <http://www.gnu.org/licenses/>.
- */
-
-#include "PrecompiledHeader.h"
+// SPDX-FileCopyrightText: 2002-2023 PCSX2 Dev Team
+// SPDX-License-Identifier: LGPL-3.0+
 
 #define _PC_ // disables MIPS opcode macros.
 
@@ -21,6 +7,7 @@
 #include "common/ByteSwap.h"
 #include "common/FileSystem.h"
 #include "common/Path.h"
+#include "common/SmallString.h"
 #include "common/StringUtil.h"
 #include "common/ZipHelpers.h"
 
@@ -113,9 +100,9 @@ namespace Patch
 		bool operator==(const PatchCommand& p) const { return std::memcmp(this, &p, sizeof(*this)) == 0; }
 		bool operator!=(const PatchCommand& p) const { return std::memcmp(this, &p, sizeof(*this)) != 0; }
 
-		std::string ToString() const
+		SmallString ToString() const
 		{
-			return fmt::format("{},{},{},{:08x},{:x}", s_place_to_string[static_cast<u8>(placetopatch)],
+			return SmallString::from_fmt("{},{},{},{:08x},{:x}", s_place_to_string[static_cast<u8>(placetopatch)],
 				s_cpu_to_string[static_cast<u8>(cpu)], s_type_to_string[static_cast<u8>(type)], addr, data);
 		}
 	};
@@ -259,6 +246,45 @@ u32 Patch::LoadPatchesFromString(PatchList* patch_list, const std::string& patch
 	const size_t before = patch_list->size();
 
 	PatchGroup current_patch_group;
+	const auto add_current_patch = [patch_list, &current_patch_group]() {
+		if (current_patch_group.patches.empty())
+			return;
+
+		// Ungrouped/legacy patches should merge with other ungrouped patches.
+		if (current_patch_group.name.empty())
+		{
+			const PatchList::iterator ungrouped_patch = std::find_if(patch_list->begin(), patch_list->end(),
+				[](const PatchGroup& pg) { return pg.name.empty(); });
+			if (ungrouped_patch != patch_list->end())
+			{
+				Console.WriteLn(Color_Gray, fmt::format(
+												"Patch: Merging {} new patch commands into ungrouped list.", current_patch_group.patches.size()));
+
+				ungrouped_patch->patches.reserve(ungrouped_patch->patches.size() + current_patch_group.patches.size());
+				for (PatchCommand& cmd : current_patch_group.patches)
+					ungrouped_patch->patches.push_back(std::move(cmd));
+			}
+			else
+			{
+				// Always add ungrouped patches, no sense to compare empty names.
+				patch_list->push_back(std::move(current_patch_group));
+			}
+
+			return;
+		}
+
+		// Don't show patches with duplicate names, prefer the first loaded.
+		if (!ContainsPatchName(*patch_list, current_patch_group.name))
+		{
+			patch_list->push_back(std::move(current_patch_group));
+		}
+		else
+		{
+			Console.WriteLn(Color_Gray, fmt::format(
+				"Patch: Skipped loading patch '{}' since a patch with a duplicate name was already loaded.",
+				current_patch_group.name));
+		}
+	};
 
 	std::istringstream ss(patch_file);
 	std::string line;
@@ -278,19 +304,14 @@ u32 Patch::LoadPatchesFromString(PatchList* patch_list, const std::string& patch
 
 			if (!current_patch_group.name.empty() || !current_patch_group.patches.empty())
 			{
-				// Don't show patches with duplicate names, prefer the first loaded.
-				if (!ContainsPatchName(*patch_list, current_patch_group.name))
-				{
-					patch_list->push_back(std::move(current_patch_group));
-				}
-				else
-				{
-					Console.WriteLn(Color_Gray, fmt::format("Patch: Skipped loading patch '{}' since a patch with a duplicate name was already loaded.", current_patch_group.name));
-				}
+				add_current_patch();
 				current_patch_group = {};
 			}
 
 			current_patch_group.name = line.substr(1, line.length() - 2);
+			if (current_patch_group.name.empty())
+				Console.Error(fmt::format("Malformed patch name: {}", line));
+
 			continue;
 		}
 
@@ -298,7 +319,7 @@ u32 Patch::LoadPatchesFromString(PatchList* patch_list, const std::string& patch
 	}
 
 	if (!current_patch_group.name.empty() || !current_patch_group.patches.empty())
-		patch_list->push_back(std::move(current_patch_group));
+		add_current_patch();
 
 	return static_cast<u32>(patch_list->size() - before);
 }
@@ -532,14 +553,14 @@ std::string_view Patch::PatchInfo::GetNameParentPart() const
 	return ret;
 }
 
-Patch::PatchInfoList Patch::GetPatchInfo(const std::string_view& serial, u32 crc, bool cheats, u32* num_unlabelled_patches)
+Patch::PatchInfoList Patch::GetPatchInfo(const std::string_view& serial, u32 crc, bool cheats, bool showAllCRCS, u32* num_unlabelled_patches)
 {
 	PatchInfoList ret;
 
 	if (num_unlabelled_patches)
 		*num_unlabelled_patches = 0;
 
-	EnumeratePnachFiles(serial, crc, cheats, true,
+	EnumeratePnachFiles(serial, crc, cheats, showAllCRCS,
 		[&ret, num_unlabelled_patches](const std::string& filename, const std::string& pnach_data) {
 			ExtractPatchInfo(&ret, pnach_data, num_unlabelled_patches);
 		});
@@ -596,8 +617,8 @@ u32 Patch::EnablePatches(const PatchList& patches, const EnablePatchList& enable
 		for (const PatchCommand& ip : p.patches)
 		{
 			// print the actual patch lines only in verbose mode (even in devel)
-			if (DevConWriterEnabled)
-				DevCon.Indent().WriteLn(ip.ToString());
+			if (Log::GetMaxLevel() >= LOGLEVEL_DEV)
+				DevCon.WriteLnFmt("  {}", ip.ToString());
 
 			s_active_patches.push_back(&ip);
 		}
@@ -607,7 +628,8 @@ u32 Patch::EnablePatches(const PatchList& patches, const EnablePatchList& enable
 		if (p.override_interlace_mode.has_value())
 			s_override_interlace_mode = p.override_interlace_mode;
 
-		count++;
+		// Count unlabelled patches once per command, or one patch per group.
+		count += p.name.empty() ? static_cast<u32>(p.patches.size()) : 1;
 	}
 
 	return count;

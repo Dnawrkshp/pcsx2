@@ -1,17 +1,5 @@
-/*  PCSX2 - PS2 Emulator for PCs
- *  Copyright (C) 2002-2023 PCSX2 Dev Team
- *
- *  PCSX2 is free software: you can redistribute it and/or modify it under the terms
- *  of the GNU Lesser General Public License as published by the Free Software Found-
- *  ation, either version 3 of the License, or (at your option) any later version.
- *
- *  PCSX2 is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY;
- *  without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR
- *  PURPOSE.  See the GNU General Public License for more details.
- *
- *  You should have received a copy of the GNU General Public License along with PCSX2.
- *  If not, see <http://www.gnu.org/licenses/>.
- */
+// SPDX-FileCopyrightText: 2002-2023 PCSX2 Dev Team
+// SPDX-License-Identifier: LGPL-3.0+
 
 //#version 420 // Keep it for text editor detection
 
@@ -592,7 +580,7 @@ vec4 sample_color(vec2 st)
 		c[i].a = ( (PS_AEM == 0) || any(bvec3(c[i].rgb))  ) ? TA.x : 0.0f;
 		//c[i].a = ( (PS_AEM == 0) || (sum > 0.0f) ) ? TA.x : 0.0f;
 #elif (PS_AEM_FMT == FMT_16)
-		c[i].a = c[i].a >= 0.5 ? TA.y : ( (PS_AEM == 0) || any(bvec3(c[i].rgb)) ) ? TA.x : 0.0f;
+		c[i].a = c[i].a >= 0.5 ? TA.y : ( (PS_AEM == 0) || any(bvec3(ivec3(c[i].rgb * 255.0f) & ivec3(0xF8))) ) ? TA.x : 0.0f;
 		//c[i].a = c[i].a >= 0.5 ? TA.y : ( (PS_AEM == 0) || (sum > 0.0f) ) ? TA.x : 0.0f;
 #endif
 	}
@@ -699,6 +687,21 @@ vec4 ps_color()
 	vec4 T = sample_color(st);
 #endif
 
+	#if PS_SHUFFLE && !PS_SHUFFLE_SAME && !PS_READ16_SRC
+		uvec4 denorm_c_before = uvec4(T);
+		#if PS_READ_BA
+			T.r = float((denorm_c_before.b << 3) & 0xF8);
+			T.g = float(((denorm_c_before.b >> 2) & 0x38) | ((denorm_c_before.a << 6) & 0xC0));
+			T.b = float((denorm_c_before.a << 1) & 0xF8);
+			T.a = float(denorm_c_before.a & 0x80);
+		#else
+			T.r = float((denorm_c_before.r << 3) & 0xF8);
+			T.g = float(((denorm_c_before.r >> 2) & 0x38) | ((denorm_c_before.g << 6) & 0xC0));
+			T.b = float((denorm_c_before.g << 1) & 0xF8);
+			T.a = float(denorm_c_before.g & 0x80);
+		#endif
+	#endif
+	
 	vec4 C = tfx(T, PSin.c);
 
 	atst(C);
@@ -949,7 +952,56 @@ void ps_main()
 
 	vec4 C = ps_color();
 
+	// Must be done before alpha correction
+
+	// AA (Fixed one) will output a coverage of 1.0 as alpha
+#if PS_FIXED_ONE_A
+	C.a = 128.0f;
+#endif
+
+#if SW_AD_TO_HW
+	vec4 RT = trunc(fetch_rt() * 255.0f + 0.1f);
+	vec4 alpha_blend = vec4(RT.a / 128.0f);
+#else
+	vec4 alpha_blend = vec4(C.a / 128.0f);
+#endif
+
+	// Correct the ALPHA value based on the output format
+#if (PS_DST_FMT == FMT_16)
+	float A_one = 128.0f; // alpha output will be 0x80
+	C.a = (PS_FBA != 0) ? A_one : step(128.0f, C.a) * A_one;
+#elif (PS_DST_FMT == FMT_32) && (PS_FBA != 0)
+	if(C.a < 128.0f) C.a += 128.0f;
+#endif
+
+	// Get first primitive that will write a failling alpha value
+#if PS_DATE == 1
+	// DATM == 0
+	// Pixel with alpha equal to 1 will failed (128-255)
+	SV_Target0 = (C.a > 127.5f) ? vec4(gl_PrimitiveID) : vec4(0x7FFFFFFF);
+	return;
+#elif PS_DATE == 2
+	// DATM == 1
+	// Pixel with alpha equal to 0 will failed (0-127)
+	SV_Target0 = (C.a < 127.5f) ? vec4(gl_PrimitiveID) : vec4(0x7FFFFFFF);
+	return;
+#endif
+
+	ps_blend(C, alpha_blend);
+
+
 #if PS_SHUFFLE
+	#if !PS_SHUFFLE_SAME && !PS_READ16_SRC
+		uvec4 denorm_c_after = uvec4(C);
+		#if PS_READ_BA
+			C.b = float(((denorm_c_after.r >> 3) & 0x1F) | ((denorm_c_after.g << 2) & 0xE0));
+			C.a = float(((denorm_c_after.g >> 6) & 0x3) | ((denorm_c_after.b >> 1) & 0x7C) | (denorm_c_after.a & 0x80));
+		#else
+			C.r = float(((denorm_c_after.r >> 3) & 0x1F) | ((denorm_c_after.g << 2) & 0xE0));
+			C.g = float(((denorm_c_after.g >> 6) & 0x3) | ((denorm_c_after.b >> 1) & 0x7C) | (denorm_c_after.a & 0x80));
+		#endif
+	#endif
+	
 	uvec4 denorm_c = uvec4(C);
 	uvec2 denorm_TA = uvec2(vec2(TA.xy) * 255.0f + 0.5f);
 
@@ -1002,43 +1054,6 @@ void ps_main()
 
 #endif // PS_SHUFFLE_SAME
 #endif // PS_SHUFFLE
-
-	// Must be done before alpha correction
-
-	// AA (Fixed one) will output a coverage of 1.0 as alpha
-#if PS_FIXED_ONE_A
-	C.a = 128.0f;
-#endif
-
-#if SW_AD_TO_HW
-	vec4 RT = trunc(fetch_rt() * 255.0f + 0.1f);
-	vec4 alpha_blend = vec4(RT.a / 128.0f);
-#else
-	vec4 alpha_blend = vec4(C.a / 128.0f);
-#endif
-
-	// Correct the ALPHA value based on the output format
-#if (PS_DST_FMT == FMT_16)
-	float A_one = 128.0f; // alpha output will be 0x80
-	C.a = (PS_FBA != 0) ? A_one : step(128.0f, C.a) * A_one;
-#elif (PS_DST_FMT == FMT_32) && (PS_FBA != 0)
-	if(C.a < 128.0f) C.a += 128.0f;
-#endif
-
-	// Get first primitive that will write a failling alpha value
-#if PS_DATE == 1
-	// DATM == 0
-	// Pixel with alpha equal to 1 will failed (128-255)
-	SV_Target0 = (C.a > 127.5f) ? vec4(gl_PrimitiveID) : vec4(0x7FFFFFFF);
-	return;
-#elif PS_DATE == 2
-	// DATM == 1
-	// Pixel with alpha equal to 0 will failed (0-127)
-	SV_Target0 = (C.a < 127.5f) ? vec4(gl_PrimitiveID) : vec4(0x7FFFFFFF);
-	return;
-#endif
-
-	ps_blend(C, alpha_blend);
 
 	ps_dither(C.rgb);
 

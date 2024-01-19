@@ -1,19 +1,6 @@
-/*  PCSX2 - PS2 Emulator for PCs
- *  Copyright (C) 2002-2023 PCSX2 Dev Team
- *
- *  PCSX2 is free software: you can redistribute it and/or modify it under the terms
- *  of the GNU Lesser General Public License as published by the Free Software Found-
- *  ation, either version 3 of the License, or (at your option) any later version.
- *
- *  PCSX2 is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY;
- *  without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR
- *  PURPOSE.  See the GNU General Public License for more details.
- *
- *  You should have received a copy of the GNU General Public License along with PCSX2.
- *  If not, see <http://www.gnu.org/licenses/>.
- */
+// SPDX-FileCopyrightText: 2002-2023 PCSX2 Dev Team
+// SPDX-License-Identifier: LGPL-3.0+
 
-#include "PrecompiledHeader.h"
 #include "Config.h"
 #include "Input/SDLInputSource.h"
 #include "Input/InputManager.h"
@@ -143,6 +130,14 @@ static void SetControllerRGBLED(SDL_GameController* gc, u32 color)
 	SDL_GameControllerSetLED(gc, (color >> 16) & 0xff, (color >> 8) & 0xff, color & 0xff);
 }
 
+static void SDLLogCallback(void* userdata, int category, SDL_LogPriority priority, const char* message)
+{
+	if (priority >= SDL_LOG_PRIORITY_INFO)
+		Console.WriteLn(fmt::format("SDL: {}", message));
+	else
+		DevCon.WriteLn(fmt::format("SDL: {}", message));
+}
+
 SDLInputSource::SDLInputSource() = default;
 
 SDLInputSource::~SDLInputSource()
@@ -231,43 +226,34 @@ u32 SDLInputSource::ParseRGBForPlayerId(const std::string_view& str, u32 player_
 
 void SDLInputSource::SetHints()
 {
+	if (const std::string upath = Path::Combine(EmuFolders::DataRoot, CONTROLLER_DB_FILENAME); FileSystem::FileExists(upath.c_str()))
+	{
+		Console.WriteLn(Color_StrongGreen, fmt::format("SDLInputSource: Using Controller DB from user directory: '{}'", upath));
+		SDL_SetHint(SDL_HINT_GAMECONTROLLERCONFIG_FILE, upath.c_str());
+	}
+	else if (const std::string rpath = EmuFolders::GetOverridableResourcePath(CONTROLLER_DB_FILENAME); FileSystem::FileExists(rpath.c_str()))
+	{
+		Console.WriteLn(Color_StrongGreen, "SDLInputSource: Using Controller DB from resources.");
+		SDL_SetHint(SDL_HINT_GAMECONTROLLERCONFIG_FILE, rpath.c_str());
+	}
+	else
+	{
+		Console.Error(fmt::format("SDLInputSource: Controller DB not found, it should be named '{}'", CONTROLLER_DB_FILENAME));
+	}
+
 	SDL_SetHint(SDL_HINT_JOYSTICK_RAWINPUT, m_controller_raw_mode ? "1" : "0");
 	SDL_SetHint(SDL_HINT_JOYSTICK_HIDAPI_PS4_RUMBLE, m_controller_enhanced_mode ? "1" : "0");
 	SDL_SetHint(SDL_HINT_JOYSTICK_HIDAPI_PS5_RUMBLE, m_controller_enhanced_mode ? "1" : "0");
 	// Enable Wii U Pro Controller support
-	// New as of SDL 2.26, so use string
-	SDL_SetHint("SDL_JOYSTICK_HIDAPI_WII", "1");
+	SDL_SetHint(SDL_HINT_JOYSTICK_HIDAPI_WII, "1");
 #ifndef _WIN32
 	// Gets us pressure sensitive button support on Linux
 	// Apparently doesn't work on Windows, so leave it off there
-	// New as of SDL 2.26, so use string
-	SDL_SetHint("SDL_JOYSTICK_HIDAPI_PS3", "1");
+	SDL_SetHint(SDL_HINT_JOYSTICK_HIDAPI_PS3, "1");
 #endif
 
 	for (const std::pair<std::string, std::string>& hint : m_sdl_hints)
 		SDL_SetHint(hint.first.c_str(), hint.second.c_str());
-}
-
-bool SDLInputSource::LoadControllerDB()
-{
-	Error error;
-	auto fp = FileSystem::OpenManagedCFile(Path::Combine(EmuFolders::Resources, CONTROLLER_DB_FILENAME).c_str(), "rb", &error);
-	std::optional<std::string> data;
-	if (!fp || !(data = FileSystem::ReadFileToString(fp.get())))
-	{
-		Console.Error(fmt::format("SDLInputSource: Failed to open controller database: {}", error.GetDescription()));
-		return false;
-	}
-
-	if (SDL_GameControllerAddMappingsFromRW(SDL_RWFromConstMem(data->c_str(), data->length()), SDL_TRUE) < 0)
-	{
-		Console.Error(fmt::format("SDLInputSource: SDL_GameControllerAddMappingsFromRW() failed: {}", SDL_GetError()));
-		return false;
-	}
-
-	Console.WriteLn(Color_StrongGreen, fmt::format("SDLInputSource: Loaded {} controller mappings from {}.",
-										   SDL_GameControllerNumMappings(), CONTROLLER_DB_FILENAME));
-	return true;
 }
 
 bool SDLInputSource::InitializeSubsystem()
@@ -278,9 +264,16 @@ bool SDLInputSource::InitializeSubsystem()
 		return false;
 	}
 
+	SDL_LogSetOutputFunction(SDLLogCallback, nullptr);
+#ifdef PCSX2_DEVBUILD
+	SDL_LogSetAllPriority(SDL_LOG_PRIORITY_VERBOSE);
+#else
+	SDL_LogSetAllPriority(SDL_LOG_PRIORITY_INFO);
+#endif
+
 	// we should open the controllers as the connected events come in, so no need to do any more here
 	m_sdl_subsystem_initialized = true;
-	LoadControllerDB();
+	Console.WriteLn(Color_StrongGreen, fmt::format("SDLInputSource: {} controller mappings are loaded.", SDL_GameControllerNumMappings()));
 	return true;
 }
 
@@ -328,7 +321,7 @@ std::vector<std::pair<std::string, std::string>> SDLInputSource::EnumerateDevice
 
 std::optional<InputBindingKey> SDLInputSource::ParseKeyString(const std::string_view& device, const std::string_view& binding)
 {
-	if (!StringUtil::StartsWith(device, "SDL-") || binding.empty())
+	if (!device.starts_with("SDL-") || binding.empty())
 		return std::nullopt;
 
 	const std::optional<s32> player_id = StringUtil::FromChars<s32>(device.substr(4));
@@ -339,7 +332,7 @@ std::optional<InputBindingKey> SDLInputSource::ParseKeyString(const std::string_
 	key.source_type = InputSourceType::SDL;
 	key.source_index = static_cast<u32>(player_id.value());
 
-	if (StringUtil::EndsWith(binding, "Motor"))
+	if (binding.ends_with("Motor"))
 	{
 		key.source_subtype = InputSubclass::ControllerMotor;
 		if (binding == "LargeMotor")
@@ -357,7 +350,7 @@ std::optional<InputBindingKey> SDLInputSource::ParseKeyString(const std::string_
 			return std::nullopt;
 		}
 	}
-	else if (StringUtil::EndsWith(binding, "Haptic"))
+	else if (binding.ends_with("Haptic"))
 	{
 		key.source_subtype = InputSubclass::ControllerHaptic;
 		key.data = 0;
@@ -368,7 +361,7 @@ std::optional<InputBindingKey> SDLInputSource::ParseKeyString(const std::string_
 		// likely an axis
 		const std::string_view axis_name(binding.substr(1));
 
-		if (StringUtil::StartsWith(axis_name, "Axis"))
+		if (axis_name.starts_with("Axis"))
 		{
 			std::string_view end;
 			if (auto value = StringUtil::FromChars<u32>(axis_name.substr(4), 10, &end))
@@ -392,7 +385,7 @@ std::optional<InputBindingKey> SDLInputSource::ParseKeyString(const std::string_
 			}
 		}
 	}
-	else if (StringUtil::StartsWith(binding, "FullAxis"))
+	else if (binding.starts_with("FullAxis"))
 	{
 		std::string_view end;
 		if (auto value = StringUtil::FromChars<u32>(binding.substr(8), 10, &end))
@@ -404,7 +397,7 @@ std::optional<InputBindingKey> SDLInputSource::ParseKeyString(const std::string_
 			return key;
 		}
 	}
-	else if (StringUtil::StartsWith(binding, "Hat"))
+	else if (binding.starts_with("Hat"))
 	{
 		std::string_view hat_dir;
 		if (auto value = StringUtil::FromChars<u32>(binding.substr(3), 10, &hat_dir); value.has_value() && !hat_dir.empty())
@@ -423,7 +416,7 @@ std::optional<InputBindingKey> SDLInputSource::ParseKeyString(const std::string_
 	else
 	{
 		// must be a button
-		if (StringUtil::StartsWith(binding, "Button"))
+		if (binding.starts_with("Button"))
 		{
 			if (auto value = StringUtil::FromChars<u32>(binding.substr(6)))
 			{
@@ -575,7 +568,7 @@ bool SDLInputSource::ProcessSDLEvent(const SDL_Event* event)
 
 SDL_Joystick* SDLInputSource::GetJoystickForDevice(const std::string_view& device)
 {
-	if (!StringUtil::StartsWith(device, "SDL-"))
+	if (!device.starts_with("SDL-"))
 		return nullptr;
 
 	const std::optional<s32> player_id = StringUtil::FromChars<s32>(device.substr(4));
@@ -635,7 +628,6 @@ bool SDLInputSource::OpenDevice(int index, bool is_gamecontroller)
 	if (!gcontroller && !joystick)
 	{
 		Console.Error("(SDLInputSource) Failed to open controller %d", index);
-
 		return false;
 	}
 
@@ -694,6 +686,8 @@ bool SDLInputSource::OpenDevice(int index, bool is_gamecontroller)
 			mark_bind(SDL_GameControllerGetBindForAxis(gcontroller, static_cast<SDL_GameControllerAxis>(i)));
 		for (size_t i = 0; i < std::size(s_sdl_button_names); i++)
 			mark_bind(SDL_GameControllerGetBindForButton(gcontroller, static_cast<SDL_GameControllerButton>(i)));
+
+		Console.WriteLn("(SDLInputSource) Controller %d has %d axes and %d buttons", player_id, num_axes, num_buttons);
 	}
 	else
 	{
@@ -701,6 +695,9 @@ bool SDLInputSource::OpenDevice(int index, bool is_gamecontroller)
 		const int num_hats = SDL_JoystickNumHats(joystick);
 		if (num_hats > 0)
 			cd.last_hat_state.resize(static_cast<size_t>(num_hats), u8(0));
+
+		Console.WriteLn("(SDLInputSource) Joystick %d has %d axes, %d buttons and %d hats", player_id,
+			SDL_JoystickNumAxes(joystick), SDL_JoystickNumButtons(joystick), num_hats);
 	}
 
 	cd.use_game_controller_rumble = (gcontroller && SDL_GameControllerRumble(gcontroller, 0, 0, 0) == 0);
@@ -890,7 +887,7 @@ std::vector<InputBindingKey> SDLInputSource::EnumerateMotors()
 
 bool SDLInputSource::GetGenericBindingMapping(const std::string_view& device, InputManager::GenericInputBindingMapping* mapping)
 {
-	if (!StringUtil::StartsWith(device, "SDL-"))
+	if (!device.starts_with("SDL-"))
 		return false;
 
 	const std::optional<s32> player_id = StringUtil::FromChars<s32>(device.substr(4));
