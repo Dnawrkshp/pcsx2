@@ -2205,6 +2205,7 @@ std::optional<WindowInfo> MainWindow::acquireRenderWindow(bool recreate_window, 
 	std::optional<WindowInfo> wi = m_display_widget->getWindowInfo();
 	if (!wi.has_value())
 	{
+		return WindowInfo();
 		QMessageBox::critical(this, tr("Error"), tr("Failed to get window info from widget"));
 		destroyDisplayWidget(true);
 		return std::nullopt;
