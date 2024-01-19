@@ -2205,7 +2205,6 @@ std::optional<WindowInfo> MainWindow::acquireRenderWindow(bool recreate_window, 
 	std::optional<WindowInfo> wi = m_display_widget->getWindowInfo();
 	if (!wi.has_value())
 	{
-		return WindowInfo();
 		QMessageBox::critical(this, tr("Error"), tr("Failed to get window info from widget"));
 		destroyDisplayWidget(true);
 		return std::nullopt;
@@ -2226,7 +2225,7 @@ void MainWindow::createDisplayWidget(bool fullscreen, bool render_to_main)
 {
 	// If we're rendering to main and were hidden (e.g. coming back from fullscreen),
 	// make sure we're visible before trying to add ourselves. Otherwise Wayland breaks.
-	if (!fullscreen && render_to_main && !isVisible() && !QtHost::InNoGUIMode())
+	if (!fullscreen && render_to_main && !isVisible())
 	{
 		setVisible(true);
 		QGuiApplication::sync();
