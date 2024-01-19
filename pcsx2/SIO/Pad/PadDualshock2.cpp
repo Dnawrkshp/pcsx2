@@ -23,8 +23,10 @@
 #include "Common.h"
 #include "Input/InputManager.h"
 #include "Host.h"
-
 #include "IconsPromptFont.h"
+
+int pinePad = 0;
+u8 pineBuf[32];
 
 static const InputBindingInfo s_bindings[] = {
 	// clang-format off

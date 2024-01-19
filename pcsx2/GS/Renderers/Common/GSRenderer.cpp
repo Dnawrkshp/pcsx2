@@ -44,6 +44,11 @@
 #include <thread>
 #include <mutex>
 
+
+u8 FRAME_BUFFER_COPY[512 * 448 * 4];
+int FRAME_BUFFER_COPY_ACTIVE = 0;
+GSTexture* FRAME_BUFFER_RT_TEXTURE;
+
 static constexpr std::array<PresentShader, 8> s_tv_shader_indices = {
 	PresentShader::COPY, PresentShader::SCANLINE,
 	PresentShader::DIAGONAL_FILTER, PresentShader::TRIANGULAR_FILTER,
@@ -69,6 +74,7 @@ GSRenderer::GSRenderer()
 	: m_shader_time_start(Common::Timer::GetCurrentValue())
 {
 	s_last_draw_rect = GSVector4::zero();
+	FRAME_BUFFER_RT_TEXTURE = g_gs_device->CreateRenderTarget(512, 448, GSTexture::Format::Color, false);
 }
 
 GSRenderer::~GSRenderer() = default;
@@ -783,6 +789,59 @@ void GSRenderer::VSync(u32 field, bool registers_written, bool idle_frame)
 				g_gs_device->Recycle(temp);
 			}
 		}
+	}
+	else if (FRAME_BUFFER_COPY_ACTIVE > 0)
+	{
+		if (current)
+		{
+			// We're not expecting screenshots to be fast, so just allocate a download texture on demand.
+			if (FRAME_BUFFER_RT_TEXTURE)
+			{
+				std::unique_ptr<GSDownloadTexture> dl(g_gs_device->CreateDownloadTexture(512, 448, GSTexture::Format::Color));
+				if (dl)
+				{
+					const GSVector4i rc(0, 0, 512, 448);
+					g_gs_device->StretchRect(current, src_uv, FRAME_BUFFER_RT_TEXTURE, GSVector4(rc), ShaderConvert::TRANSPARENCY_FILTER);
+					dl->CopyFromTexture(rc, FRAME_BUFFER_RT_TEXTURE, rc, 0);
+					dl->Flush();
+
+					if (dl->Map(rc))
+					{
+						const int w = 512;
+						const int h = 448;
+						u8* dst = (u8*)FRAME_BUFFER_COPY;
+						u8* src = (u8*)dl->GetMapPointer();
+						int dstpitch = w * 4;
+						int srcpitch = dl->GetMapPitch();
+
+						dst += dstpitch * (h - 1);
+						dstpitch = -dstpitch;
+
+						for (int j = 0; j < h; j++, dst += dstpitch, src += srcpitch)
+						{
+							if (!g_gs_device->IsRBSwapped())
+							{
+								GSVector4i* s = (GSVector4i*)src;
+								GSVector4i* d = (GSVector4i*)dst;
+
+								GSVector4i mask(2, 1, 0, 3, 6, 5, 4, 7, 10, 9, 8, 11, 14, 13, 12, 15);
+
+								for (int i = 0, w4 = w >> 2; i < w4; i++)
+								{
+									d[i] = s[i].shuffle8(mask);
+								}
+							}
+							else
+							{
+								memcpy(dst, src, w * 4);
+							}
+						}
+					}
+				}
+			}
+		}
+
+		FRAME_BUFFER_COPY_ACTIVE--;
 	}
 }
 

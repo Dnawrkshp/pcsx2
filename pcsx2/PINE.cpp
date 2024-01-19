@@ -34,13 +34,35 @@
 #include <unistd.h>
 #endif
 
+#include "MTGS.h"
 #include "Common.h"
 #include "Memory.h"
-#include "Elfheader.h"
+#include "pcsx2/Counters.h"
+#include "pcsx2/Recording/InputRecordingControls.h"
 #include "pcsx2/VMManager.h"
 #include "svnrev.h"
 #include "SysForwardDefs.h"
 #include "PINE.h"
+#include "pcsx2/FrameStep.h"
+#include <GS/Renderers/Common/GSTexture.h>
+#include <GS/Renderers/Common/GSDevice.h>
+
+#include "SIO/Pad/Pad.h"
+#include "SIO/Pad/PadDualshock2.h"
+#include "SIO/Sio.h"
+
+#include "GS/Renderers/Common/GSRenderer.h"
+#include <Host.h>
+
+extern u8 FRAME_BUFFER_COPY[];
+extern int FRAME_BUFFER_COPY_ACTIVE;
+extern bool g_eeRecExecuting;
+
+int g_pine_slot = 0;
+int g_disable_rendering = 0;
+
+void SetPad(int port, int slot, u8* buf);
+uptr vtlb_getTblPtr(u32 addr);
 
 PINEServer::PINEServer() {}
 
@@ -185,9 +207,9 @@ int PINEServer::StartSocket()
 			m_end = true;
 			return -1;
 		}
-	}
+		}
 	return 0;
-}
+	}
 
 void PINEServer::MainLoop()
 {
@@ -212,6 +234,7 @@ void PINEServer::MainLoop()
 			if (tmp_length <= 0)
 			{
 				receive_length = 0;
+				ExitProcess(0);
 				if (StartSocket() < 0)
 					return;
 				break;
@@ -245,6 +268,7 @@ void PINEServer::MainLoop()
 			// if we cannot send back our answer restart the socket
 			if (write_portable(m_msgsock, res.buffer.data(), res.size) < 0)
 			{
+				ExitProcess(0);
 				if (StartSocket() < 0)
 					return;
 			}
@@ -279,7 +303,7 @@ PINEServer::IPCBuffer PINEServer::ParseCommand(std::span<u8> buf, std::vector<u8
 	while (buf_cnt < buf_size)
 	{
 		if (!SafetyChecks(buf_cnt, 1, ret_cnt, 0, buf_size))
-			return IPCBuffer{5, MakeFailIPC(ret_buffer)};
+			return IPCBuffer{ 5, MakeFailIPC(ret_buffer) };
 		buf_cnt++;
 		// example IPC messages: MsgRead/Write
 		// refer to the client doc for more info on the format
@@ -307,20 +331,20 @@ PINEServer::IPCBuffer PINEServer::ParseCommand(std::span<u8> buf, std::vector<u8
 				buf_cnt += 4;
 				break;
 			}
-			case MsgRead16:
+		case MsgRead16:
 			{
 				if (!VMManager::HasValidVM())
 					goto error;
-				if (!SafetyChecks(buf_cnt, 4, ret_cnt, 2, buf_size))
-					goto error;
-				const u32 a = FromSpan<u32>(buf, buf_cnt);
-				const u16 res = memRead16(a);
-				ToResultVector(ret_buffer, res, ret_cnt);
-				ret_cnt += 2;
-				buf_cnt += 4;
-				break;
-			}
-			case MsgRead32:
+			if (!SafetyChecks(buf_cnt, 4, ret_cnt, 2, buf_size))
+				goto error;
+			const u32 a = FromSpan<u32>(buf, buf_cnt);
+			const u16 res = memRead16(a);
+			ToResultVector(ret_buffer, res, ret_cnt);
+			ret_cnt += 2;
+			buf_cnt += 4;
+			break;
+		}
+		case MsgRead32:
 			{
 				if (!VMManager::HasValidVM())
 					goto error;
@@ -491,34 +515,277 @@ PINEServer::IPCBuffer PINEServer::ParseCommand(std::span<u8> buf, std::vector<u8
 				ret_cnt += size;
 				break;
 			}
-			case MsgStatus:
-			{
-				if (!SafetyChecks(buf_cnt, 0, ret_cnt, 4, buf_size))
-					goto error;
-				EmuStatus status;
+		case MsgStatus:
+		{
+			if (!SafetyChecks(buf_cnt, 0, ret_cnt, 8, buf_size))
+				goto error;
+			EmuStatus status;
 
-				switch (VMManager::GetState()) {
-				case VMState::Running:
-					status = EmuStatus::Running;
-					break;
-				case VMState::Paused:
-					status = EmuStatus::Paused;
-					break;
-				default:
-					status = EmuStatus::Shutdown;
+			if (VMManager::HasValidVM())
+			{
+				if (g_FrameStep.IsPaused())
+					status = Paused;
+				else
+				{
+					switch (VMManager::GetState())
+					{
+						case VMState::Running:
+							status = EmuStatus::Running;
+							break;
+						case VMState::Paused:
+							status = EmuStatus::Paused;
+							break;
+						default:
+							status = EmuStatus::Shutdown;
+							break;
+					}
+				}
+			}
+			else
+			{
+				status = Shutdown;
+			}
+
+			ToResultVector(ret_buffer, status, ret_cnt);
+			ToResultVector(ret_buffer, g_FrameCount, ret_cnt + 4);
+			ToResultVector(ret_buffer, g_eeRecExecuting, ret_cnt + 8);
+			ret_cnt += 9;
+			break;
+		}
+
+		case MsgReadN:
+		{
+			if (!VMManager::HasValidVM())
+				goto error;
+			if (!SafetyChecks(buf_cnt, 6, ret_cnt, 1, buf_size))
+				goto error;
+
+			const u32 a = FromSpan<u32>(buf, buf_cnt);
+			const u16 l = FromSpan<u16>(buf, buf_cnt + 4);
+			if (!SafetyChecks(buf_cnt, 6, ret_cnt, l, buf_size))
+				goto error;
+			if (!vtlb_memSafeReadBytes(a, reinterpret_cast<mem8_t*>(&ret_buffer[ret_cnt]), (u32)l))
+				goto error;
+			//if (!vtlb_ramRead(a, reinterpret_cast<mem8_t*>(&ret_buffer[ret_cnt]), (u32)l))
+			//	goto error;
+			ret_cnt += l;
+			buf_cnt += 6;
+			break;
+		}
+		case MsgWriteN:
+		{
+			if (!VMManager::HasValidVM())
+				goto error;
+			if (!SafetyChecks(buf_cnt, 6, ret_cnt, 1, buf_size))
+				goto error;
+
+			const u32 a = FromSpan<u32>(buf, buf_cnt);
+			const u32 c = FromSpan<u16>(buf, buf_cnt + 4);
+			if (!SafetyChecks(buf_cnt, c + 6, ret_cnt, 0, buf_size))
+				goto error;
+			buf_cnt += 6;
+			vtlb_memSafeWriteBytes(a, reinterpret_cast<mem8_t*>(&buf[buf_cnt]), (u32)c);
+			//if (!vtlb_ramWrite(a, reinterpret_cast<mem8_t*>(&buf[buf_cnt]), (u32)c))
+			//	goto error;
+			buf_cnt += c;
+			u8 res = 1;
+			ToResultVector(ret_buffer, res, ret_cnt);
+			ret_cnt += 1;
+			break;
+		}
+		case MsgFrameAdvance:
+		{
+			if (!VMManager::HasValidVM())
+				goto error;
+			if (!SafetyChecks(buf_cnt, 0, ret_cnt, 1, buf_size))
+				goto error;
+			g_FrameStep.FrameAdvance();
+			u8 res = 1;
+			ToResultVector(ret_buffer, res, ret_cnt);
+			ret_cnt += 1;
+			break;
+		}
+		case MsgSetDynamicSetting:
+		{
+			if (!SafetyChecks(buf_cnt, 1, ret_cnt, 1, buf_size))
+				goto error;
+
+			// get args
+			const enum DynamicSettingId settingId = (enum DynamicSettingId)FromSpan<u8>(buf, buf_cnt);
+
+			switch (settingId)
+			{
+				case DynamicSettingFrameSleepWait:
+				{
+					const u8 value = FromSpan<u8>(buf, buf_cnt + 1);
+					g_FrameStep.SetSleepWait(value != 0);
+					buf_cnt += 1;
 					break;
 				}
+				case DynamicSettingDisableRendering:
+				{
+					const u8 value = FromSpan<u8>(buf, buf_cnt + 1);
+					g_disable_rendering = value != 0;
 
-				ToResultVector(ret_buffer, status, ret_cnt);
-				ret_cnt += 4;
-				break;
+					buf_cnt += 1;
+					break;
+				}
+				default:
+				{
+					break;
+				}
 			}
-			default:
-			{
-			error:
-				return IPCBuffer{5, MakeFailIPC(ret_buffer)};
-			}
+
+			buf_cnt += 1;
+
+			u8 res = 1;
+			ToResultVector(ret_buffer, res, ret_cnt);
+			ret_cnt += 1;
+			break;
+		}
+		case MsgResume:
+		{
+			if (!VMManager::HasValidVM())
+				goto error;
+			if (!SafetyChecks(buf_cnt, 0, ret_cnt, 1, buf_size))
+				goto error;
+			g_FrameStep.Resume();
+			u8 res = 1;
+			ToResultVector(ret_buffer, res, ret_cnt);
+			ret_cnt += 1;
+			break;
+		}
+		case MsgPause:
+		{
+			if (!VMManager::HasValidVM())
+				goto error;
+			if (!SafetyChecks(buf_cnt, 0, ret_cnt, 1, buf_size))
+				goto error;
+			g_FrameStep.Pause();
+			u8 res = 1;
+			ToResultVector(ret_buffer, res, ret_cnt);
+			ret_cnt += 1;
+			break;
+		}
+		case MsgRestart:
+		{
+			if (!VMManager::HasValidVM())
+				goto error;
+			//g_Conf->EmuOptions.UseBOOT2Injection = true;
+			VMManager::Reset();
+			//CoreThread.ResetQuick();
+			//CoreThread.Resume();
+			g_FrameStep.Resume();
+
+			u8 res = 1;
+			ToResultVector(ret_buffer, res, ret_cnt);
+			ret_cnt += 1;
+			break;
+		}
+		case MsgStop:
+		{
+			if (!SafetyChecks(buf_cnt, 0, ret_cnt, 1, buf_size))
+				goto error;
+			//g_Conf->EmuOptions.UseBOOT2Injection = true;
+			//CoreThread.ResetQuick();
+
+
+			VMManager::Shutdown(false);
+
+			//if (GSFrame* gsframe = wxGetApp().GetGsFramePtr())
+			//	gsframe->Show(false);
+
+			//CoreThread.Resume();
+			g_FrameStep.Resume();
+
+			u8 res = 1;
+			ToResultVector(ret_buffer, res, ret_cnt);
+			ret_cnt += 1;
+			break;
+		}
+		case MsgGetFrameBuffer:
+		{
+			int bitCount = 512 * 448 * 4;
+			if (!VMManager::HasValidVM())
+				goto error;
+			if (!SafetyChecks(buf_cnt, 0, ret_cnt, bitCount, buf_size))
+				goto error;
+
+			FRAME_BUFFER_COPY_ACTIVE = 3;
+
+			memcpy(&ret_buffer[ret_cnt], FRAME_BUFFER_COPY, bitCount);
+			ret_cnt += bitCount;
+			break;
+		}
+		case MsgSetPad:
+		{
+			if (!VMManager::HasValidVM())
+				goto error;
+			if (!SafetyChecks(buf_cnt, 36, ret_cnt, 1, buf_size))
+				goto error;
+
+			// get args
+			const u16 port = FromSpan<u16>(buf, buf_cnt);
+			const u16 slot = FromSpan<u16>(buf, buf_cnt + 2);
+			buf_cnt += 4;
+
+			// set pad
+			SetPad(port, slot, (u8*)&buf[buf_cnt]);
+
+			buf_cnt += 32;
+			u8 res = 1;
+			ToResultVector(ret_buffer, res, ret_cnt);
+			ret_cnt += 1;
+			break;
+		}
+		case MsgGetVmPtr:
+		{
+			if (!VMManager::HasValidVM())
+				goto error;
+			if (!SafetyChecks(buf_cnt, 0, ret_cnt, 8, buf_size))
+				goto error;
+
+			uptr res = vtlb_getTblPtr(0x100000);
+			ToResultVector(ret_buffer, res - 0x100000, ret_cnt);
+			ret_cnt += 8;
+
+			res = (uptr)&g_EEMemBackBuffer;
+			ToResultVector(ret_buffer, res, ret_cnt);
+			ret_cnt += 8;
+			break;
+		}
+
+		default:
+		{
+		error:
+			return IPCBuffer{ 5, MakeFailIPC(ret_buffer) };
+		}
 		}
 	}
-	return IPCBuffer{(int)ret_cnt, MakeOkIPC(ret_buffer, ret_cnt)};
+	return IPCBuffer{ (int)ret_cnt, MakeOkIPC(ret_buffer, ret_cnt) };
+}
+
+void SetPad(int port, int slot, u8* buf)
+{
+	PadBase* pad = Pad::GetPad(port);
+	pad->SetRawAnalogs(std::tuple<u8, u8>(buf[6], buf[7]), std::tuple<u8, u8>(buf[4], buf[5]));
+
+	pad->Set(PadDualshock2::Inputs::PAD_RIGHT, buf[8]);
+	pad->Set(PadDualshock2::Inputs::PAD_LEFT, buf[9]);
+	pad->Set(PadDualshock2::Inputs::PAD_UP, buf[10]);
+	pad->Set(PadDualshock2::Inputs::PAD_DOWN, buf[11]);
+	pad->Set(PadDualshock2::Inputs::PAD_START, buf[20]);
+	pad->Set(PadDualshock2::Inputs::PAD_SELECT, buf[21]);
+	pad->Set(PadDualshock2::Inputs::PAD_R3, buf[23]);
+	pad->Set(PadDualshock2::Inputs::PAD_L3, buf[22]);
+
+	pad->Set(PadDualshock2::Inputs::PAD_SQUARE, buf[15]);
+	pad->Set(PadDualshock2::Inputs::PAD_CROSS, buf[14]);
+	pad->Set(PadDualshock2::Inputs::PAD_CIRCLE, buf[13]);
+	pad->Set(PadDualshock2::Inputs::PAD_TRIANGLE, buf[12]);
+
+	pad->Set(PadDualshock2::Inputs::PAD_R1, buf[17]);
+	pad->Set(PadDualshock2::Inputs::PAD_L1, buf[16]);
+	pad->Set(PadDualshock2::Inputs::PAD_R2, buf[19]);
+	pad->Set(PadDualshock2::Inputs::PAD_L2, buf[18]);
 }

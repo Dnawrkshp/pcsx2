@@ -65,6 +65,8 @@
 #include <cmath>
 #include <csignal>
 
+extern int g_pine_slot;
+
 static constexpr u32 SETTINGS_SAVE_DELAY = 1000;
 
 EmuThread* g_emu_thread = nullptr;
@@ -607,7 +609,7 @@ void Host::CheckForSettingsChanges(const Pcsx2Config& old_config)
 
 bool EmuThread::shouldRenderToMain() const
 {
-	return !Host::GetBoolSettingValue("UI", "RenderToSeparateWindow", false) && !QtHost::InNoGUIMode();
+	return true; // !Host::GetBoolSettingValue("UI", "RenderToSeparateWindow", false) && !QtHost::InNoGUIMode();
 }
 
 void EmuThread::toggleSoftwareRendering()
@@ -1686,6 +1688,11 @@ bool QtHost::ParseCommandLineOptions(const QStringList& args, std::shared_ptr<VM
 			else if (CHECK_ARG(QStringLiteral("-debugger")))
 			{
 				s_boot_and_debug = true;
+				continue;
+			}
+			else if (CHECK_ARG(QStringLiteral("-pineslot")))
+			{
+				g_pine_slot = (++it)->toInt();
 				continue;
 			}
 			else if (CHECK_ARG(QStringLiteral("-updatecleanup")))

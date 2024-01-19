@@ -41,6 +41,8 @@
 #include "DebugTools/SymbolMap.h"
 #include "R5900OpcodeTables.h"
 
+#include "pcsx2/FrameStep.h"
+
 using namespace R5900;	// for R5900 disasm tools
 
 s32 EEsCycle;		// used to sync the IOP to the EE
@@ -726,6 +728,10 @@ void eeloadHook()
 			AllowParams2 = true;
 		}
 	}
+
+
+	// map extra 96mb
+	vtlb_VMap(0x02000000, 0x02000000, 0x06000000);
 
 	VMManager::Internal::ELFLoadingOnCPUThread(std::move(elfname));
 }
