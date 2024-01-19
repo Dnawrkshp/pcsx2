@@ -1912,14 +1912,17 @@ void EmuFolders::SetResourcesDirectory()
 
 bool EmuFolders::ShouldUsePortableMode()
 {
-	return true;
-
 	// Check whether portable.ini exists in the program directory.
 	return FileSystem::FileExists(Path::Combine(AppRoot, "portable.ini").c_str());
 }
 
 void EmuFolders::SetDataDirectory()
 {
+	if (!DataRoot.empty())
+	{
+		return;
+	}
+
 	if (ShouldUsePortableMode())
 	{
 		DataRoot = AppRoot;
