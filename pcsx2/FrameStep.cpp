@@ -21,6 +21,9 @@ void FrameStep::CheckPauseStatus()
 	}
 }
 
+#pragma GCC push_options
+#pragma GCC optimize("O0")
+
 void FrameStep::HandlePausing()
 {
 	if (pauseEmulation && VMManager::GetState() == VMState::Running)
@@ -28,8 +31,6 @@ void FrameStep::HandlePausing()
 		emulationCurrentlyPaused = true;
 		while (emulationCurrentlyPaused && !resumeEmulation) {
 			if (sleepWhileWaiting) { Threading::Sleep(1); } // sleep until resumeEmulation is true
-			//else Threading::Sleep(1); // sleep until resumeEmulation is true
-			ShortSpin();
 			
 			//DevCon.WriteLn("waiting for frame advance... %d %d %d\n", resumeEmulation, frameAdvancing, frame_advance_frame_counter);
 		}
@@ -37,6 +38,8 @@ void FrameStep::HandlePausing()
 		emulationCurrentlyPaused = false;
 	}
 }
+
+#pragma GCC pop_options
 
 void FrameStep::FrameAdvance()
 {

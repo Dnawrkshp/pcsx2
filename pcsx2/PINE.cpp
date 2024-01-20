@@ -743,7 +743,7 @@ PINEServer::IPCBuffer PINEServer::ParseCommand(std::span<u8> buf, std::vector<u8
 			ToResultVector(ret_buffer, res, ret_cnt);
 			ret_cnt += 8;
 
-			res = (uptr)&FRAME_BUFFER_COPY;
+			res = (uptr)FRAME_BUFFER_COPY;
 			ToResultVector(ret_buffer, res, ret_cnt);
 			ret_cnt += 8;
 			break;
