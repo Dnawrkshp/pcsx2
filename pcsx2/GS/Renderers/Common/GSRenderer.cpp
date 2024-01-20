@@ -32,9 +32,8 @@
 
 static void DumpGSPrivRegs(const GSPrivRegSet& r, const std::string& filename);
 
-
+extern int g_disable_rendering;
 u8 FRAME_BUFFER_COPY[512 * 448 * 4];
-int FRAME_BUFFER_COPY_ACTIVE = 0;
 GSTexture* FRAME_BUFFER_RT_TEXTURE;
 
 static constexpr std::array<PresentShader, 8> s_tv_shader_indices = {
@@ -780,7 +779,7 @@ void GSRenderer::VSync(u32 field, bool registers_written, bool idle_frame)
 			}
 		}
 	}
-	else if (FRAME_BUFFER_COPY_ACTIVE > 0)
+	else if (!g_disable_rendering)
 	{
 		if (current)
 		{
@@ -830,8 +829,6 @@ void GSRenderer::VSync(u32 field, bool registers_written, bool idle_frame)
 				}
 			}
 		}
-
-		FRAME_BUFFER_COPY_ACTIVE--;
 	}
 }
 

@@ -54,7 +54,6 @@
 #include <Host.h>
 
 extern u8 FRAME_BUFFER_COPY[];
-extern int FRAME_BUFFER_COPY_ACTIVE;
 extern bool g_eeRecExecuting;
 
 int g_pine_slot = 0;
@@ -700,8 +699,6 @@ PINEServer::IPCBuffer PINEServer::ParseCommand(std::span<u8> buf, std::vector<u8
 				goto error;
 			if (!SafetyChecks(buf_cnt, 0, ret_cnt, bitCount, buf_size))
 				goto error;
-
-			FRAME_BUFFER_COPY_ACTIVE = 3;
 
 			memcpy(&ret_buffer[ret_cnt], FRAME_BUFFER_COPY, bitCount);
 			ret_cnt += bitCount;
