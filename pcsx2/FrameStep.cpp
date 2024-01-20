@@ -31,8 +31,11 @@ void FrameStep::HandlePausing()
 	{
 		emulationCurrentlyPaused = true;
 		while (emulationCurrentlyPaused && !resumeEmulation) {
-			if (sleepWhileWaiting) { Threading::Sleep(1); } // sleep until resumeEmulation is true
-			if (resumeEmulation) { ++i; }
+			if (sleepWhileWaiting)
+				Threading::Sleep(1);
+
+			if (resumeEmulation || frameAdvancing) [[unlikely]]
+				++i;
 			
 			//DevCon.WriteLn("waiting for frame advance... %d %d %d\n", resumeEmulation, frameAdvancing, frame_advance_frame_counter);
 		}
