@@ -32,6 +32,9 @@ void FrameStep::HandlePausing()
 			// otherwise just eat cycle until we can
 			//volatile int i = 0;
 			//i++;
+
+			
+			DevCon.WriteLn("waiting for frame advance... %d %d %d\n", resumeEmulation, frameAdvancing, frame_advance_frame_counter);
 		}
 		resumeEmulation = false;
 		emulationCurrentlyPaused = false;

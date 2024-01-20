@@ -507,7 +507,7 @@ PINEServer::IPCBuffer PINEServer::ParseCommand(std::span<u8> buf, std::vector<u8
 			}
 		case MsgStatus:
 		{
-			if (!SafetyChecks(buf_cnt, 0, ret_cnt, 8, buf_size))
+			if (!SafetyChecks(buf_cnt, 0, ret_cnt, 9, buf_size))
 				goto error;
 			EmuStatus status;
 
