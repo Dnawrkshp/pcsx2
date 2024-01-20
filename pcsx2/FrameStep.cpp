@@ -26,11 +26,13 @@ void FrameStep::CheckPauseStatus()
 
 void FrameStep::HandlePausing()
 {
+	volatile int i;
 	if (pauseEmulation && VMManager::GetState() == VMState::Running)
 	{
 		emulationCurrentlyPaused = true;
 		while (emulationCurrentlyPaused && !resumeEmulation) {
 			if (sleepWhileWaiting) { Threading::Sleep(1); } // sleep until resumeEmulation is true
+			if (resumeEmulation) { ++i; }
 			
 			//DevCon.WriteLn("waiting for frame advance... %d %d %d\n", resumeEmulation, frameAdvancing, frame_advance_frame_counter);
 		}
