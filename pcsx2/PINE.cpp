@@ -732,7 +732,7 @@ PINEServer::IPCBuffer PINEServer::ParseCommand(std::span<u8> buf, std::vector<u8
 		{
 			if (!VMManager::HasValidVM())
 				goto error;
-			if (!SafetyChecks(buf_cnt, 0, ret_cnt, 8, buf_size))
+			if (!SafetyChecks(buf_cnt, 0, ret_cnt, 8*3, buf_size))
 				goto error;
 
 			uptr res = vtlb_getTblPtr(0x100000);
@@ -740,6 +740,10 @@ PINEServer::IPCBuffer PINEServer::ParseCommand(std::span<u8> buf, std::vector<u8
 			ret_cnt += 8;
 
 			res = (uptr)&g_EEMemBackBuffer;
+			ToResultVector(ret_buffer, res, ret_cnt);
+			ret_cnt += 8;
+
+			res = (uptr)&FRAME_BUFFER_COPY;
 			ToResultVector(ret_buffer, res, ret_cnt);
 			ret_cnt += 8;
 			break;
