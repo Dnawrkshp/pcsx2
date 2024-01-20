@@ -46,7 +46,7 @@ private:
 	// Indicates if we intend to call CoreThread.PauseSelf() on the current or next available vsync
 	bool pauseEmulation = false;
 	// Indicates if we intend to call CoreThread.Resume() when the next pcsx2 App event is handled
-	bool resumeEmulation = false;
+	volatile bool resumeEmulation = false;
 };
 
 extern FrameStep g_FrameStep;
