@@ -936,7 +936,7 @@ struct Pcsx2Config
 	struct SpeedhackOptions
 	{
 		static constexpr s8 MIN_EE_CYCLE_RATE = -3;
-		static constexpr s8 MAX_EE_CYCLE_RATE = 3;
+		static constexpr s8 MAX_EE_CYCLE_RATE = 4;
 		static constexpr u8 MAX_EE_CYCLE_SKIP = 3;
 
 		BITFIELD32()

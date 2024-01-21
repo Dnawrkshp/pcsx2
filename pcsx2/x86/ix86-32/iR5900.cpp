@@ -1263,7 +1263,7 @@ static u32 scaleblockcycles_calculation()
 	const s8 cyclerate = EmuConfig.Speedhacks.EECycleRate;
 	u32 scale_cycles = 0;
 
-	if (cyclerate == 0 || lowcycles || cyclerate < -99 || cyclerate > 3)
+	if (cyclerate == 0 || lowcycles || cyclerate < -99 || cyclerate > 4)
 		scale_cycles = DEFAULT_SCALED_BLOCKS();
 
 	else if (cyclerate > 1)

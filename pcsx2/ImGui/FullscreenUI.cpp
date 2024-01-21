@@ -2903,6 +2903,7 @@ void FullscreenUI::DrawEmulationSettingsPage()
 		FSUI_NSTR("130% Speed"),
 		FSUI_NSTR("180% Speed"),
 		FSUI_NSTR("300% Speed"),
+		FSUI_NSTR("700% Speed"),
 	};
 	static constexpr const char* ee_cycle_skip_settings[] = {
 		FSUI_NSTR("Normal (Default)"),
