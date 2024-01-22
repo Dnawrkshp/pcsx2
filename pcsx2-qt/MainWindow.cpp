@@ -2229,6 +2229,8 @@ void MainWindow::createDisplayWidget(bool fullscreen, bool render_to_main)
 	{
 		setVisible(true);
 		QGuiApplication::sync();
+		if (QtHost::InNoGUIMode())
+			showMinimized();
 	}
 
 	QWidget* container;
