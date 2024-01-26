@@ -191,7 +191,7 @@
         </item>
         <item>
          <property name="text">
-          <string>420% (Overclock)</string>
+          <string>MAX% (Overclock)</string>
          </property>
         </item>
        </widget>

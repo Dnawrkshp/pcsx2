@@ -1279,6 +1279,9 @@ static u32 scaleblockcycles_calculation()
 	else
 		scale_cycles = ((5 + (-2 * (cyclerate + 1))) * s_nBlockCycles) >> 5;
 
+	if (cyclerate == 4)
+		scale_cycles = (s_nBlockCycles <= 30) ? 2 : 1;
+
 	// Ensure block cycle count is never less than 1.
 	return (scale_cycles < 1) ? 1 : scale_cycles;
 }
@@ -1301,7 +1304,7 @@ static u32 scaleblockcycles()
 	unscaled_overall += unscaled;
 	float ratio = static_cast<float>(unscaled_overall) / scaled_overall;
 
-	DevCon.WriteLn(L"Unscaled overall: %d,  scaled overall: %d,  relative EE clock speed: %d %%",
+	DevCon.WriteLn("Unscaled overall: %d,  scaled overall: %d,  relative EE clock speed: %d %%",
 	               unscaled_overall, scaled_overall, static_cast<int>(100 * ratio));
 #endif
 
