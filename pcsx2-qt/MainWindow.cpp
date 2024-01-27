@@ -2227,10 +2227,16 @@ void MainWindow::createDisplayWidget(bool fullscreen, bool render_to_main)
 	// make sure we're visible before trying to add ourselves. Otherwise Wayland breaks.
 	if (!fullscreen && render_to_main && !isVisible())
 	{
+#if _WIN32
+		if (!QtHost::InNoGUIMode())
+		{
+			setVisible(true);
+			QGuiApplication::sync();
+		}
+#else
 		setVisible(true);
 		QGuiApplication::sync();
-		if (QtHost::InNoGUIMode())
-			showMinimized();
+#endif
 	}
 
 	QWidget* container;
