@@ -132,6 +132,7 @@ protected:
 	{
 		DynamicSettingFrameSleepWait = 0, /**< If true, FrameStep sleeps while waiting for next frame command. */
 		DynamicSettingDisableRendering = 1, /**< If true, Renderer is set to NULL. */
+		DynamicSettingReloadConfig = 2, /**< Reloads PCSX2 config file */
 		DynamicSettingIdUnimplemented = 0xFF /**< Unimplemented DynamicSettingId. */
 	};
 

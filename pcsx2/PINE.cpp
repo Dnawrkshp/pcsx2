@@ -43,6 +43,7 @@
 #include "svnrev.h"
 #include "PINE.h"
 #include "pcsx2/FrameStep.h"
+#include "LayeredSettingsInterface.h"
 #include <GS/Renderers/Common/GSTexture.h>
 #include <GS/Renderers/Common/GSDevice.h>
 
@@ -52,6 +53,7 @@
 
 #include "GS/Renderers/Common/GSRenderer.h"
 #include <Host.h>
+#include <INISettingsInterface.h>
 
 extern u8 FRAME_BUFFER_COPY[];
 extern bool g_eeRecExecuting;
@@ -617,6 +619,18 @@ PINEServer::IPCBuffer PINEServer::ParseCommand(std::span<u8> buf, std::vector<u8
 					g_disable_rendering = value != 0;
 
 					buf_cnt += 1;
+					break;
+				}
+				case DynamicSettingReloadConfig:
+				{
+					LayeredSettingsInterface* lsi = (LayeredSettingsInterface*)Host::GetSettingsInterface();
+					INISettingsInterface* si = (INISettingsInterface*)lsi->GetLayer(LayeredSettingsInterface::LAYER_BASE);
+					if (si)
+					{
+						si->Clear();
+						si->Load();
+					}
+					VMManager::ApplySettings();
 					break;
 				}
 				default:
