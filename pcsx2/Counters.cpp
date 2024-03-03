@@ -33,7 +33,6 @@ static int gates = 0;
 uint g_FrameCount = 0;
 
 const u32 eeMemBackBufferStart = 0x80000;
-u8 g_EEMemBackBuffer[2][EEMEM_BACKBUFFER_SIZE];
 
 // Counter 4 takes care of scanlines - hSync/hBlanks
 // Counter 5 takes care of vSync/vBlanks

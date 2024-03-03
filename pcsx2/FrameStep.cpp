@@ -15,9 +15,9 @@ void FrameStep::CheckPauseStatus()
 	frame_advance_frame_counter++;
 	if (frameAdvancing && frame_advance_frame_counter >= frames_per_frame_advance)
 	{
-		frameAdvancing = false;
 		pauseEmulation = true;
 		resumeEmulation = false;
+		frameAdvancing = false;
 	}
 }
 
@@ -28,6 +28,7 @@ void FrameStep::HandlePausing()
 		emulationCurrentlyPaused = true;
 		while (!resumeEmulation) {
 			if (sleepWhileWaiting) { Threading::Sleep(1); } // sleep until resumeEmulation is true
+			else { Threading::Sleep(0); }
 			//else Threading::Sleep(1); // sleep until resumeEmulation is true
 			// otherwise just eat cycle until we can
 			//volatile int i = 0;
@@ -45,6 +46,11 @@ void FrameStep::FrameAdvance()
 	frameAdvancing = true;
 	frame_advance_frame_counter = 0;
 	Resume();
+}
+
+bool FrameStep::IsFrameAdvancing()
+{
+	return frameAdvancing || pauseEmulation || emulationCurrentlyPaused;
 }
 
 bool FrameStep::IsPaused()

@@ -58,8 +58,11 @@
 extern u8 FRAME_BUFFER_COPY[];
 extern bool g_eeRecExecuting;
 
+bool g_pine_timeout = false;
 int g_pine_slot = 0;
 int g_disable_rendering = 0;
+int reset = 0;
+time_t g_pine_last_recv_seconds;
 
 void SetPad(int port, int slot, u8* buf);
 uptr vtlb_getTblPtr(u32 addr);
@@ -81,7 +84,7 @@ bool PINEServer::Initialize(int slot)
 
 	if (WSAStartup(MAKEWORD(2, 2), &wsa) != 0)
 	{
-		Console.WriteLn(Color_Red, "PINE: Cannot initialize winsock! Shutting down...");
+		DevCon.WriteLn(Color_Red, "PINE: Cannot initialize winsock! Shutting down...");
 		Deinitialize();
 		return false;
 	}
@@ -89,7 +92,7 @@ bool PINEServer::Initialize(int slot)
 	m_sock = socket(AF_INET, SOCK_STREAM, 0);
 	if ((m_sock == INVALID_SOCKET) || slot > 65536)
 	{
-		Console.WriteLn(Color_Red, "PINE: Cannot open socket! Shutting down...");
+		DevCon.WriteLn(Color_Red, "PINE: Cannot open socket! Shutting down...");
 		Deinitialize();
 		return false;
 	}
@@ -102,7 +105,7 @@ bool PINEServer::Initialize(int slot)
 
 	if (bind(m_sock, (struct sockaddr*)&server, sizeof(server)) == SOCKET_ERROR)
 	{
-		Console.WriteLn(Color_Red, "PINE: Error while binding to socket! Shutting down...");
+		DevCon.WriteLn(Color_Red, "PINE: Error while binding to socket! Shutting down...");
 		Deinitialize();
 		return false;
 	}
@@ -132,7 +135,7 @@ bool PINEServer::Initialize(int slot)
 	m_sock = socket(AF_UNIX, SOCK_STREAM, 0);
 	if (m_sock < 0)
 	{
-		Console.WriteLn(Color_Red, "PINE: Cannot open socket! Shutting down...");
+		DevCon.WriteLn(Color_Red, "PINE: Cannot open socket! Shutting down...");
 		Deinitialize();
 		return false;
 	}
@@ -144,7 +147,7 @@ bool PINEServer::Initialize(int slot)
 	unlink(m_socket_name.c_str());
 	if (bind(m_sock, (struct sockaddr*)&server, sizeof(struct sockaddr_un)))
 	{
-		Console.WriteLn(Color_Red, "PINE: Error while binding to socket! Shutting down...");
+		DevCon.WriteLn(Color_Red, "PINE: Error while binding to socket! Shutting down...");
 		Deinitialize();
 		return false;
 	}
@@ -155,7 +158,7 @@ bool PINEServer::Initialize(int slot)
 	// that a "reasonable" value is 5, which is not.
 	if (listen(m_sock, 4096))
 	{
-		Console.WriteLn(Color_Red, "PINE: Cannot listen for connections! Shutting down...");
+		DevCon.WriteLn(Color_Red, "PINE: Cannot listen for connections! Shutting down...");
 		Deinitialize();
 		return false;
 	}
@@ -165,8 +168,12 @@ bool PINEServer::Initialize(int slot)
 	m_ret_buffer.resize(MAX_IPC_RETURN_SIZE);
 	m_ipc_buffer.resize(MAX_IPC_SIZE);
 
+	// reset recv time
+	g_pine_last_recv_seconds = time(NULL);
+
 	// we start the thread
 	m_thread = std::thread(&PINEServer::MainLoop, this);
+	m_thread2 = std::thread(&PINEServer::TimeoutLoop, this);
 
 	return true;
 }
@@ -203,13 +210,35 @@ int PINEServer::StartSocket()
 		if (!(errno == ECONNABORTED || errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK))
 		{
 #endif
-			fprintf(stderr, "PINE: An unrecoverable error happened! Shutting down...\n");
+			DevCon.WriteLn("PINE: An unrecoverable error happened! Shutting down...");
 			m_end = true;
 			return -1;
 		}
-		}
-	return 0;
 	}
+	return 0;
+}
+
+void PINEServer::TimeoutLoop()
+{
+	while (1 || g_pine_timeout)
+	{
+		if (g_FrameStep.IsFrameAdvancing())
+		{
+			// if host client doesn't connect within period of time then close
+			time_t time_seconds = time(NULL);
+			if ((time_seconds - g_pine_last_recv_seconds) > 15)
+			{
+				DevCon.WriteLn("PINE: Host has timedout! Shutting down...");
+				g_FrameStep.Resume();
+				g_disable_rendering = false;
+				reset = 1;
+				//ExitProcess(0);
+			}
+		}
+
+		Sleep(1000);
+	}
+}
 
 void PINEServer::MainLoop()
 {
@@ -234,7 +263,8 @@ void PINEServer::MainLoop()
 			if (tmp_length <= 0)
 			{
 				receive_length = 0;
-				exit(0);
+				//exit(0);
+				DevCon.WriteLn("PINE: Cannot recieve request.. restarting socket...");
 				if (StartSocket() < 0)
 					return;
 				break;
@@ -263,17 +293,29 @@ void PINEServer::MainLoop()
 		// disconnects
 		if (receive_length != 0)
 		{
+			g_pine_last_recv_seconds = time(NULL);
 			res = ParseCommand(ipc_buffer_span.subspan(4), m_ret_buffer, (u32)end_length - 4);
 
 			// if we cannot send back our answer restart the socket
 			if (write_portable(m_msgsock, res.buffer.data(), res.size) < 0)
 			{
-				exit(0);
+				//exit(0);
+				DevCon.WriteLn("PINE: Cannot send response.. restarting socket...");
 				if (StartSocket() < 0)
 					return;
 			}
 		}
+
+		if (reset)
+		{
+			reset = 0;
+			close_portable(m_msgsock);
+			if (StartSocket() < 0)
+				return;
+		}
 	}
+
+	DevCon.WriteLn("PINE: exiting socket loop...");
 	return;
 }
 
@@ -293,6 +335,11 @@ void PINEServer::Deinitialize()
 	{
 		m_thread.join();
 	}
+
+	if (m_thread2.joinable())
+	{
+		m_thread2.join();
+	}
 }
 
 PINEServer::IPCBuffer PINEServer::ParseCommand(std::span<u8> buf, std::vector<u8>& ret_buffer, u32 buf_size)
@@ -305,6 +352,9 @@ PINEServer::IPCBuffer PINEServer::ParseCommand(std::span<u8> buf, std::vector<u8
 		if (!SafetyChecks(buf_cnt, 1, ret_cnt, 0, buf_size))
 			return IPCBuffer{ 5, MakeFailIPC(ret_buffer) };
 		buf_cnt++;
+
+		IPCCommand cmd = (IPCCommand)buf[buf_cnt - 1];
+
 		// example IPC messages: MsgRead/Write
 		// refer to the client doc for more info on the format
 		//         IPC Message event (1 byte)
@@ -316,7 +366,7 @@ PINEServer::IPCBuffer PINEServer::ParseCommand(std::span<u8> buf, std::vector<u8
 		//        |  return value (VLE)
 		//        |  |
 		// reply: XX ZZ ZZ ZZ ZZ
-		switch ((IPCCommand)buf[buf_cnt - 1])
+		switch (cmd)
 		{
 			case MsgRead8:
 			{
@@ -633,6 +683,12 @@ PINEServer::IPCBuffer PINEServer::ParseCommand(std::span<u8> buf, std::vector<u8
 					VMManager::ApplySettings();
 					break;
 				}
+				case DynamicSettingResetSocket:
+				{
+					DevCon.WriteLn("PINE: Recv DynamicSettingResetSocket.. restarting socket...");
+					reset = 1;
+					break;
+				}
 				default:
 				{
 					break;
@@ -750,7 +806,11 @@ PINEServer::IPCBuffer PINEServer::ParseCommand(std::span<u8> buf, std::vector<u8
 			ToResultVector(ret_buffer, res - 0x100000, ret_cnt);
 			ret_cnt += 8;
 
-			res = (uptr)&g_EEMemBackBuffer;
+			res = (uptr)&g_FrameCount;
+			ToResultVector(ret_buffer, res, ret_cnt);
+			ret_cnt += 8;
+
+			res = (uptr)&g_eeRecExecuting;
 			ToResultVector(ret_buffer, res, ret_cnt);
 			ret_cnt += 8;
 
@@ -763,6 +823,7 @@ PINEServer::IPCBuffer PINEServer::ParseCommand(std::span<u8> buf, std::vector<u8
 		default:
 		{
 		error:
+			DevCon.WriteLn(Color_Red, "PINE: Command failed %d", cmd);
 			return IPCBuffer{ 5, MakeFailIPC(ret_buffer) };
 		}
 		}

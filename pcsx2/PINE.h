@@ -41,6 +41,7 @@ extern int g_pine_slot;
 class PINEServer
 {
 	std::thread m_thread;
+	std::thread m_thread2;
 
 protected:
 #ifdef _WIN32
@@ -133,6 +134,7 @@ protected:
 		DynamicSettingFrameSleepWait = 0, /**< If true, FrameStep sleeps while waiting for next frame command. */
 		DynamicSettingDisableRendering = 1, /**< If true, Renderer is set to NULL. */
 		DynamicSettingReloadConfig = 2, /**< Reloads PCSX2 config file */
+		DynamicSettingResetSocket = 3, /**< Resets the PINE socket */
 		DynamicSettingIdUnimplemented = 0xFF /**< Unimplemented DynamicSettingId. */
 	};
 
@@ -171,6 +173,7 @@ protected:
 
 	// Thread used to relay IPC commands.
 	void MainLoop();
+	void TimeoutLoop();
 
 	/**
 	 * Internal function, Parses an IPC command.

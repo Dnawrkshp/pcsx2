@@ -127,8 +127,6 @@ extern s32 nextCounter;		// delta until the next counter event (must be signed)
 extern u32 nextsCounter;
 extern uint g_FrameCount;
 
-extern u8 g_EEMemBackBuffer[2][EEMEM_BACKBUFFER_SIZE];
-
 extern void rcntUpdate_hScanline();
 extern void rcntUpdate_vSync();
 extern void rcntUpdate();
