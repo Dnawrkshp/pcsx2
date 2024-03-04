@@ -41,7 +41,6 @@ extern int g_pine_slot;
 class PINEServer
 {
 	std::thread m_thread;
-	std::thread m_thread2;
 
 protected:
 #ifdef _WIN32

@@ -2188,6 +2188,7 @@ static void recRecompile(const u32 startpc)
 {
 	u32 i = 0;
 	u32 willbranch3 = 0;
+	u32 ipcLastCycle = 0;
 
 	pxAssert(startpc);
 
@@ -2318,7 +2319,11 @@ static void recRecompile(const u32 startpc)
 
 	while (1)
 	{
-		s_pine_server.IpcLoop();
+		if (ipcLastCycle != cpuRegs.cycle)
+		{
+			s_pine_server.IpcLoop();
+			ipcLastCycle = cpuRegs.cycle;
+		}
 
 		BASEBLOCK* pblock = PC_GETBLOCK(i);
 

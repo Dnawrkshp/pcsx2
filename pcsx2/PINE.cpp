@@ -199,7 +199,6 @@ bool PINEServer::Initialize(int slot)
 
 	// we start the thread
 	m_thread = std::thread(&PINEServer::MainLoop, this);
-	m_thread2 = std::thread(&PINEServer::TimeoutLoop, this);
 
 	return true;
 }
@@ -244,16 +243,6 @@ bool PINEServer::AcceptClient()
 	}
 
 	return false;
-}
-
-void PINEServer::TimeoutLoop()
-{
-	return;
-	while (!m_end.load(std::memory_order_acquire))
-	{
-		IpcLoop();
-		Sleep(1);
-	}
 }
 
 void PINEServer::IpcLoop()
@@ -391,11 +380,6 @@ void PINEServer::Deinitialize()
 	if (m_thread.joinable())
 	{
 		m_thread.join();
-	}
-
-	if (m_thread2.joinable())
-	{
-		m_thread2.join();
 	}
 }
 
