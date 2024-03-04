@@ -5,10 +5,12 @@
 #include "MemoryTypes.h"
 #include "FrameStep.h"
 #include "VMManager.h"
+#include "PINE.h"
 #include "Host.h"
 #include <common/Threading.h>
 
 FrameStep g_FrameStep;
+extern PINEServer s_pine_server;
 
 void FrameStep::CheckPauseStatus()
 {
@@ -23,6 +25,7 @@ void FrameStep::CheckPauseStatus()
 
 void FrameStep::HandlePausing()
 {
+	s_pine_server.IpcLoop();
 	if (pauseEmulation && VMManager::GetState() == VMState::Running)
 	{
 		emulationCurrentlyPaused = true;
@@ -35,6 +38,7 @@ void FrameStep::HandlePausing()
 			//i++;
 
 			//DevCon.WriteLn("waiting for frame advance... %d %d %d\n", resumeEmulation, frameAdvancing, frame_advance_frame_counter);
+			s_pine_server.IpcLoop();
 		}
 		resumeEmulation = false;
 		emulationCurrentlyPaused = false;
@@ -50,7 +54,7 @@ void FrameStep::FrameAdvance()
 
 bool FrameStep::IsFrameAdvancing()
 {
-	return frameAdvancing || pauseEmulation || emulationCurrentlyPaused;
+	return frameAdvancing;
 }
 
 bool FrameStep::IsPaused()

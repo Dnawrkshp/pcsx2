@@ -12,6 +12,7 @@
 #include "R5900OpcodeTables.h"
 #include "VMManager.h"
 #include "vtlb.h"
+#include "PINE.h"
 #include "x86/BaseblockEx.h"
 #include "x86/iR5900.h"
 #include "x86/iR5900Analysis.h"
@@ -43,6 +44,8 @@ static bool eeRecNeedsReset = false;
 static bool eeCpuExecuting = false;
 static bool eeRecExitRequested = false;
 static bool g_resetEeScalingStats = false;
+
+extern PINEServer s_pine_server;
 
 #define PC_GETBLOCK(x) PC_GETBLOCK_(x, recLUT)
 
@@ -2315,6 +2318,8 @@ static void recRecompile(const u32 startpc)
 
 	while (1)
 	{
+		s_pine_server.IpcLoop();
+
 		BASEBLOCK* pblock = PC_GETBLOCK(i);
 
 		// stop before breakpoints

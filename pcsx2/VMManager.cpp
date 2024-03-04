@@ -189,8 +189,7 @@ static u64 s_session_accumulated_playtime = 0;
 
 static bool s_screensaver_inhibited = false;
 
-static PINEServer s_pine_server;
-static PINEServer s_pine_server2;
+PINEServer s_pine_server;
 
 static bool s_discord_presence_active = false;
 static time_t s_discord_presence_time_epoch;
@@ -415,7 +414,6 @@ void VMManager::Internal::CPUThreadShutdown()
 	ShutdownDiscordPresence();
 
 	s_pine_server.Deinitialize();
-	s_pine_server2.Deinitialize();
 
 	Achievements::Shutdown(false);
 
@@ -3246,17 +3244,11 @@ void VMManager::ReloadPINE()
 		{
 			s_pine_server.Deinitialize();
 		}
-		if (!s_pine_server2.m_end)
-		{
-			s_pine_server2.Deinitialize();
-		}
 		s_pine_server.Initialize(g_pine_slot);
-		s_pine_server2.Initialize(g_pine_slot + 1);
 	}
 	else if ((!EmuConfig.EnablePINE && !s_pine_server.m_end))
 	{
 		s_pine_server.Deinitialize();
-		s_pine_server2.Deinitialize();
 	}
 }
 

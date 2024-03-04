@@ -21,14 +21,30 @@
 #if _WIN32
 #define read_portable(a, b, c) (recv(a, (char*)b, c, 0))
 #define write_portable(a, b, c) (send(a, (const char*)b, c, 0))
-#define close_portable(a) (closesocket(a))
+#define safe_close_portable(a) \
+	do \
+	{ \
+		if ((a) >= 0) \
+		{ \
+			closesocket((a)); \
+			(a) = INVALID_SOCKET; \
+		} \
+	} while (0)
 #define bzero(b, len) (memset((b), '\0', (len)), (void)0)
 #include <WinSock2.h>
 #include <windows.h>
 #else
 #define read_portable(a, b, c) (read(a, b, c))
 #define write_portable(a, b, c) (write(a, b, c))
-#define close_portable(a) (close(a))
+#define safe_close_portable(a) \
+	do \
+	{ \
+		if ((a) >= 0) \
+		{ \
+			close((a)); \
+			(a) = -1; \
+		} \
+	} while (0)
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <unistd.h>
@@ -63,6 +79,15 @@ int g_pine_slot = 0;
 int g_disable_rendering = 0;
 int reset = 0;
 time_t g_pine_last_recv_seconds;
+time_t g_pine_last_connection;
+
+struct
+{
+	u8 interop_recv_buf[MAX_IPC_SIZE];
+	u8 interop_send_buf[MAX_IPC_RETURN_SIZE];
+	int recv_len;
+	int send_len;
+} interop_state;
 
 void SetPad(int port, int slot, u8* buf);
 uptr vtlb_getTblPtr(u32 addr);
@@ -100,7 +125,7 @@ bool PINEServer::Initialize(int slot)
 	// yes very good windows s/sun/sin/g sure is fine
 	server.sin_family = AF_INET;
 	// localhost only
-	server.sin_addr.s_addr = inet_addr("127.0.0.1");
+	server.sin_addr.s_addr = htonl(INADDR_LOOPBACK); // localhost only
 	server.sin_port = htons(slot);
 
 	if (bind(m_sock, (struct sockaddr*)&server, sizeof(server)) == SOCKET_ERROR)
@@ -167,6 +192,7 @@ bool PINEServer::Initialize(int slot)
 	// request, as malloc is expansive when we optimize for µs.
 	m_ret_buffer.resize(MAX_IPC_RETURN_SIZE);
 	m_ipc_buffer.resize(MAX_IPC_SIZE);
+	m_mem_ret_buffer.resize(MAX_IPC_RETURN_SIZE);
 
 	// reset recv time
 	g_pine_last_recv_seconds = time(NULL);
@@ -192,98 +218,53 @@ std::vector<u8>& PINEServer::MakeFailIPC(std::vector<u8>& ret_buffer, uint32_t s
 	return ret_buffer;
 }
 
-int PINEServer::StartSocket()
+bool PINEServer::AcceptClient()
 {
 	m_msgsock = accept(m_sock, 0, 0);
-
-	if (m_msgsock == -1)
+	if (m_msgsock >= 0)
 	{
-		// everything else is non recoverable in our scope
-		// we also mark as recoverable socket errors where it would block a
-		// non blocking socket, even though our socket is blocking, in case
-		// we ever have to implement a non blocking socket.
-#ifdef _WIN32
-		int errno_w = WSAGetLastError();
-		if (!(errno_w == WSAECONNRESET || errno_w == WSAEINTR || errno_w == WSAEINPROGRESS || errno_w == WSAEMFILE || errno_w == WSAEWOULDBLOCK))
-		{
-#else
-		if (!(errno == ECONNABORTED || errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK))
-		{
-#endif
-			DevCon.WriteLn("PINE: An unrecoverable error happened! Shutting down...");
-			m_end = true;
-			return -1;
-		}
+		// Gross C-style cast, but SOCKET is a handle on Windows.
+		Console.WriteLn("PINE: New client with FD %d connected.", (int)m_msgsock);
+		return true;
 	}
-	return 0;
+
+	// everything else is non recoverable in our scope
+	// we also mark as recoverable socket errors where it would block a
+	// non blocking socket, even though our socket is blocking, in case
+	// we ever have to implement a non blocking socket.
+#ifdef _WIN32
+	int errno_w = WSAGetLastError();
+	if (!(errno_w == WSAECONNRESET || errno_w == WSAEINTR || errno_w == WSAEINPROGRESS || errno_w == WSAEMFILE || errno_w == WSAEWOULDBLOCK) && m_sock != INVALID_SOCKET)
+	{
+#else
+	if (!(errno == ECONNABORTED || errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK))
+	{
+#endif
+		DevCon.WriteLn("PINE: An unrecoverable error happened! Shutting down...");
+	}
+
+	return false;
 }
 
 void PINEServer::TimeoutLoop()
 {
-	while (1 || g_pine_timeout)
+	return;
+	while (!m_end.load(std::memory_order_acquire))
 	{
-		if (g_FrameStep.IsFrameAdvancing())
-		{
-			// if host client doesn't connect within period of time then close
-			time_t time_seconds = time(NULL);
-			if ((time_seconds - g_pine_last_recv_seconds) > 15)
-			{
-				DevCon.WriteLn("PINE: Host has timedout! Shutting down...");
-				g_FrameStep.Resume();
-				g_disable_rendering = false;
-				reset = 1;
-				//ExitProcess(0);
-			}
-		}
-
-		Sleep(1000);
+		IpcLoop();
+		Sleep(1);
 	}
 }
 
-void PINEServer::MainLoop()
+void PINEServer::IpcLoop()
 {
-	if (StartSocket() < 0)
-		return;
+	const std::span<u8> ipc_buffer_span(interop_state.interop_recv_buf);
 
-	while (!m_end.load(std::memory_order_acquire))
+	int len = interop_state.recv_len;
+	if (len > 0)
 	{
-		// either int or ssize_t depending on the platform, so we have to
-		// use a bunch of auto
-		auto receive_length = 0;
-		auto end_length = 4;
-		const std::span<u8> ipc_buffer_span(m_ipc_buffer);
-
-		// while we haven't received the entire packet, maybe due to
-		// socket datagram splittage, we continue to read
-		while (receive_length < end_length)
-		{
-			const auto tmp_length = read_portable(m_msgsock, &ipc_buffer_span[receive_length], MAX_IPC_SIZE - receive_length);
-
-			// we recreate the socket if an error happens
-			if (tmp_length <= 0)
-			{
-				receive_length = 0;
-				//exit(0);
-				DevCon.WriteLn("PINE: Cannot recieve request.. restarting socket...");
-				if (StartSocket() < 0)
-					return;
-				break;
-			}
-
-			receive_length += tmp_length;
-
-			// if we got at least the final size then update
-			if (end_length == 4 && receive_length >= 4)
-			{
-				end_length = FromSpan<u32>(ipc_buffer_span, 0);
-				// we'd like to avoid a client trying to do OOB
-				if (end_length > MAX_IPC_SIZE || end_length < 4)
-				{
-					receive_length = 0;
-					break;
-				}
-			}
-		}
+		interop_state.recv_len = 0;
+		interop_state.send_len = 0;
 		PINEServer::IPCBuffer res;
 
 		// we remove 4 bytes to get the message size out of the IPC command
@@ -291,32 +272,108 @@ void PINEServer::MainLoop()
 		// also, if we got a failed command, let's reset the state so we don't
 		// end up deadlocking by getting out of sync, eg when a client
 		// disconnects
-		if (receive_length != 0)
-		{
-			g_pine_last_recv_seconds = time(NULL);
-			res = ParseCommand(ipc_buffer_span.subspan(4), m_ret_buffer, (u32)end_length - 4);
+		res = ParseCommand(ipc_buffer_span.subspan(4), m_mem_ret_buffer, (u32)len - 4);
 
-			// if we cannot send back our answer restart the socket
-			if (write_portable(m_msgsock, res.buffer.data(), res.size) < 0)
+		// move response into send buf
+		memcpy((u8*)interop_state.interop_send_buf, res.buffer.data(), res.size);
+		interop_state.send_len = res.size;
+	}
+}
+
+void PINEServer::MainLoop()
+{
+	Console.WriteLn("PINE: Socket ready.");
+	while (!m_end.load(std::memory_order_acquire))
+	{
+		if (!AcceptClient())
+			continue;
+
+		g_pine_last_connection = time(NULL);
+		ClientLoop();
+		g_pine_last_connection = 0;
+
+		Console.WriteLn("PINE: Client disconnected.");
+		safe_close_portable(m_msgsock);
+	}
+
+	DevCon.WriteLn("PINE: exiting main loop...");
+}
+
+void PINEServer::ClientLoop()
+{
+	try
+	{
+		while (!m_end.load(std::memory_order_acquire))
+		{
+			// either int or ssize_t depending on the platform, so we have to
+			// use a bunch of auto
+			auto receive_length = 0;
+			auto end_length = 4;
+			const std::span<u8> ipc_buffer_span(m_ipc_buffer);
+
+			// while we haven't received the entire packet, maybe due to
+			// socket datagram splittage, we continue to read
+			while (receive_length < end_length)
 			{
-				//exit(0);
-				DevCon.WriteLn("PINE: Cannot send response.. restarting socket...");
-				if (StartSocket() < 0)
+				const auto tmp_length = read_portable(m_msgsock, &ipc_buffer_span[receive_length], MAX_IPC_SIZE - receive_length);
+
+				// we recreate the socket if an error happens
+				if (tmp_length <= 0)
+				{
+					receive_length = 0;
+					//exit(0);
+					DevCon.WriteLn("PINE: Cannot recieve request.. restarting socket...");
 					return;
+				}
+
+				receive_length += tmp_length;
+
+				// if we got at least the final size then update
+				if (end_length == 4 && receive_length >= 4)
+				{
+					end_length = FromSpan<u32>(ipc_buffer_span, 0);
+					// we'd like to avoid a client trying to do OOB
+					if (end_length > MAX_IPC_SIZE || end_length < 4)
+					{
+						receive_length = 0;
+						break;
+					}
+				}
+			}
+			PINEServer::IPCBuffer res;
+
+			// we remove 4 bytes to get the message size out of the IPC command
+			// size in ParseCommand.
+			// also, if we got a failed command, let's reset the state so we don't
+			// end up deadlocking by getting out of sync, eg when a client
+			// disconnects
+			if (receive_length != 0)
+			{
+				g_pine_last_recv_seconds = time(NULL);
+				res = ParseCommand(ipc_buffer_span.subspan(4), m_ret_buffer, (u32)end_length - 4);
+
+				// if we cannot send back our answer restart the socket
+				if (write_portable(m_msgsock, res.buffer.data(), res.size) < 0)
+				{
+					//exit(0);
+					DevCon.WriteLn("PINE: Cannot send response.. restarting socket...");
+					return;
+				}
+			}
+
+			if (reset)
+			{
+				reset = 0;
+				return;
 			}
 		}
-
-		if (reset)
-		{
-			reset = 0;
-			close_portable(m_msgsock);
-			if (StartSocket() < 0)
-				return;
-		}
+	}
+	catch (int err)
+	{
+		DevCon.WriteLn("PINE: error %d...", err);
 	}
 
 	DevCon.WriteLn("PINE: exiting socket loop...");
-	return;
 }
 
 void PINEServer::Deinitialize()
@@ -328,8 +385,8 @@ void PINEServer::Deinitialize()
 #else
 	unlink(m_socket_name.c_str());
 #endif
-	close_portable(m_sock);
-	close_portable(m_msgsock);
+	safe_close_portable(m_sock);
+	safe_close_portable(m_msgsock);
 
 	if (m_thread.joinable())
 	{
@@ -797,13 +854,16 @@ PINEServer::IPCBuffer PINEServer::ParseCommand(std::span<u8> buf, std::vector<u8
 		}
 		case MsgGetVmPtr:
 		{
-			if (!VMManager::HasValidVM())
-				goto error;
-			if (!SafetyChecks(buf_cnt, 0, ret_cnt, 8*3, buf_size))
+			//if (!VMManager::HasValidVM())
+			//	goto error;
+			if (!SafetyChecks(buf_cnt, 0, ret_cnt, 8*5, buf_size))
 				goto error;
 
-			uptr res = vtlb_getTblPtr(0x100000);
-			ToResultVector(ret_buffer, res - 0x100000, ret_cnt);
+			uptr res = 0; 
+			if (VMManager::HasValidVM())
+				res = vtlb_getTblPtr(0x100000) - 0x100000;
+
+			ToResultVector(ret_buffer, res, ret_cnt);
 			ret_cnt += 8;
 
 			res = (uptr)&g_FrameCount;
@@ -811,6 +871,10 @@ PINEServer::IPCBuffer PINEServer::ParseCommand(std::span<u8> buf, std::vector<u8
 			ret_cnt += 8;
 
 			res = (uptr)&g_eeRecExecuting;
+			ToResultVector(ret_buffer, res, ret_cnt);
+			ret_cnt += 8;
+
+			res = (uptr)&interop_state;
 			ToResultVector(ret_buffer, res, ret_cnt);
 			ret_cnt += 8;
 

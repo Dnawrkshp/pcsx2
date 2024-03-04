@@ -85,6 +85,13 @@ protected:
 	std::vector<u8> m_ipc_buffer{};
 
 	/**
+	 * IPC return buffer.
+	 * A preallocated buffer used to store all IPC replies.
+	 * to the size of 50.000 MsgWrite64 IPC calls.
+	 */
+	std::vector<u8> m_mem_ret_buffer{};
+
+	/**
 	 * IPC Command messages opcodes.
 	 * A list of possible operations possible by the IPC.
 	 * Each one of them is what we call an "opcode" and is the first
@@ -173,6 +180,7 @@ protected:
 
 	// Thread used to relay IPC commands.
 	void MainLoop();
+	void ClientLoop();
 	void TimeoutLoop();
 
 	/**
@@ -198,7 +206,7 @@ protected:
 	 * Initializes an open socket for IPC communication.
 	 * return value: -1 if a fatal failure happened, 0 otherwise.
 	 */
-	int StartSocket();
+	bool AcceptClient();
 
 	/**
 	 * Converts a primitive value to bytes in little endian
@@ -249,6 +257,7 @@ public:
 	virtual ~PINEServer();
 	bool Initialize(int slot = PINE_DEFAULT_SLOT);
 	void Deinitialize();
+	void IpcLoop();
 
 }; // class SocketIPC
 
