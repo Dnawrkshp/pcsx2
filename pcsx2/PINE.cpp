@@ -290,76 +290,69 @@ void PINEServer::MainLoop()
 
 void PINEServer::ClientLoop()
 {
-	try
+	while (!m_end.load(std::memory_order_acquire))
 	{
-		while (!m_end.load(std::memory_order_acquire))
+		// either int or ssize_t depending on the platform, so we have to
+		// use a bunch of auto
+		auto receive_length = 0;
+		auto end_length = 4;
+		const std::span<u8> ipc_buffer_span(m_ipc_buffer);
+
+		// while we haven't received the entire packet, maybe due to
+		// socket datagram splittage, we continue to read
+		while (receive_length < end_length)
 		{
-			// either int or ssize_t depending on the platform, so we have to
-			// use a bunch of auto
-			auto receive_length = 0;
-			auto end_length = 4;
-			const std::span<u8> ipc_buffer_span(m_ipc_buffer);
+			const auto tmp_length = read_portable(m_msgsock, &ipc_buffer_span[receive_length], MAX_IPC_SIZE - receive_length);
 
-			// while we haven't received the entire packet, maybe due to
-			// socket datagram splittage, we continue to read
-			while (receive_length < end_length)
+			// we recreate the socket if an error happens
+			if (tmp_length <= 0)
 			{
-				const auto tmp_length = read_portable(m_msgsock, &ipc_buffer_span[receive_length], MAX_IPC_SIZE - receive_length);
+				receive_length = 0;
+				//exit(0);
+				DevCon.WriteLn("PINE: Cannot recieve request.. restarting socket...");
+				return;
+			}
 
-				// we recreate the socket if an error happens
-				if (tmp_length <= 0)
+			receive_length += tmp_length;
+
+			// if we got at least the final size then update
+			if (end_length == 4 && receive_length >= 4)
+			{
+				end_length = FromSpan<u32>(ipc_buffer_span, 0);
+				// we'd like to avoid a client trying to do OOB
+				if (end_length > MAX_IPC_SIZE || end_length < 4)
 				{
 					receive_length = 0;
-					//exit(0);
-					DevCon.WriteLn("PINE: Cannot recieve request.. restarting socket...");
-					return;
-				}
-
-				receive_length += tmp_length;
-
-				// if we got at least the final size then update
-				if (end_length == 4 && receive_length >= 4)
-				{
-					end_length = FromSpan<u32>(ipc_buffer_span, 0);
-					// we'd like to avoid a client trying to do OOB
-					if (end_length > MAX_IPC_SIZE || end_length < 4)
-					{
-						receive_length = 0;
-						break;
-					}
+					break;
 				}
 			}
-			PINEServer::IPCBuffer res;
+		}
+		PINEServer::IPCBuffer res;
 
-			// we remove 4 bytes to get the message size out of the IPC command
-			// size in ParseCommand.
-			// also, if we got a failed command, let's reset the state so we don't
-			// end up deadlocking by getting out of sync, eg when a client
-			// disconnects
-			if (receive_length != 0)
+		// we remove 4 bytes to get the message size out of the IPC command
+		// size in ParseCommand.
+		// also, if we got a failed command, let's reset the state so we don't
+		// end up deadlocking by getting out of sync, eg when a client
+		// disconnects
+		if (receive_length != 0)
+		{
+			g_pine_last_recv_seconds = time(NULL);
+			res = ParseCommand(ipc_buffer_span.subspan(4), m_ret_buffer, (u32)end_length - 4);
+
+			// if we cannot send back our answer restart the socket
+			if (write_portable(m_msgsock, res.buffer.data(), res.size) < 0)
 			{
-				g_pine_last_recv_seconds = time(NULL);
-				res = ParseCommand(ipc_buffer_span.subspan(4), m_ret_buffer, (u32)end_length - 4);
-
-				// if we cannot send back our answer restart the socket
-				if (write_portable(m_msgsock, res.buffer.data(), res.size) < 0)
-				{
-					//exit(0);
-					DevCon.WriteLn("PINE: Cannot send response.. restarting socket...");
-					return;
-				}
-			}
-
-			if (reset)
-			{
-				reset = 0;
+				//exit(0);
+				DevCon.WriteLn("PINE: Cannot send response.. restarting socket...");
 				return;
 			}
 		}
-	}
-	catch (int err)
-	{
-		DevCon.WriteLn("PINE: error %d...", err);
+
+		if (reset)
+		{
+			reset = 0;
+			return;
+		}
 	}
 
 	DevCon.WriteLn("PINE: exiting socket loop...");
