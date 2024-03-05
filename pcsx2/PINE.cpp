@@ -18,7 +18,10 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <sys/types.h>
+#include <signal.h>
+
 #if _WIN32
+#define exit_process() (ExitProcess(0))
 #define read_portable(a, b, c) (recv(a, (char*)b, c, 0))
 #define write_portable(a, b, c) (send(a, (const char*)b, c, 0))
 #define safe_close_portable(a) \
@@ -34,6 +37,7 @@
 #include <WinSock2.h>
 #include <windows.h>
 #else
+#define exit_process() (kill(getpid(), SIGKILL))
 #define read_portable(a, b, c) (read(a, b, c))
 #define write_portable(a, b, c) (write(a, b, c))
 #define safe_close_portable(a) \
@@ -308,7 +312,7 @@ void PINEServer::ClientLoop()
 			if (tmp_length <= 0)
 			{
 				receive_length = 0;
-				//exit(0);
+				exit_process();
 				DevCon.WriteLn("PINE: Cannot recieve request.. restarting socket...");
 				return;
 			}
@@ -342,7 +346,7 @@ void PINEServer::ClientLoop()
 			// if we cannot send back our answer restart the socket
 			if (write_portable(m_msgsock, res.buffer.data(), res.size) < 0)
 			{
-				//exit(0);
+				exit_process();
 				DevCon.WriteLn("PINE: Cannot send response.. restarting socket...");
 				return;
 			}

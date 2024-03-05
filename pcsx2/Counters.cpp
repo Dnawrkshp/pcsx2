@@ -32,8 +32,6 @@ static int gates = 0;
 
 uint g_FrameCount = 0;
 
-const u32 eeMemBackBufferStart = 0x80000;
-
 // Counter 4 takes care of scanlines - hSync/hBlanks
 // Counter 5 takes care of vSync/vBlanks
 Counter counters[4];

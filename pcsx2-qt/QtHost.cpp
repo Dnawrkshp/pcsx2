@@ -53,7 +53,6 @@
 #include <csignal>
 
 extern int g_pine_slot;
-extern bool g_pine_timeout;
 
 static constexpr u32 SETTINGS_SAVE_DELAY = 1000;
 static constexpr const char* RUNTIME_RESOURCES_URL =
@@ -1684,7 +1683,6 @@ bool QtHost::ParseCommandLineOptions(const QStringList& args, std::shared_ptr<VM
 			{
 				s_batch_mode = true;
 				s_nogui_mode = true;
-				g_pine_timeout = true;
 				continue;
 			}
 			else if (CHECK_ARG(QStringLiteral("-fastboot")))
