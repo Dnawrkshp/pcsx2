@@ -78,7 +78,6 @@
 extern u8 FRAME_BUFFER_COPY[];
 extern bool g_eeRecExecuting;
 
-bool g_pine_timeout = false;
 int g_pine_slot = 0;
 int g_disable_rendering = 0;
 int reset = 0;
