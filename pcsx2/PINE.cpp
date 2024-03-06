@@ -841,7 +841,11 @@ PINEServer::IPCBuffer PINEServer::ParseCommand(std::span<u8> buf, std::vector<u8
 
 			uptr res = 0; 
 			if (VMManager::HasValidVM())
-				res = vtlb_getTblPtr(0x100000) - 0x100000;
+			{
+				res = vtlb_getTblPtr(0x100000);
+				if (res > 0)
+					res -= 0x100000;
+			}
 
 			ToResultVector(ret_buffer, res, ret_cnt);
 			ret_cnt += 8;
