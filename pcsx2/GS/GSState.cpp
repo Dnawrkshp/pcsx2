@@ -18,6 +18,8 @@
 #include <iomanip>
 #include <bit>
 
+extern int g_disable_rendering;
+
 int GSState::s_n = 0;
 int GSState::s_last_transfer_draw_n = 0;
 int GSState::s_transfer_n = 0;
@@ -1724,7 +1726,7 @@ void GSState::FlushPrim()
 		// Skip draw if Z test is enabled, but set to fail all pixels.
 		const bool skip_draw = (m_context->TEST.ZTE && m_context->TEST.ZTST == ZTST_NEVER);
 
-		if (!skip_draw)
+		if (!skip_draw && !g_disable_rendering)
 			Draw();
 
 		g_perfmon.Put(GSPerfMon::Draw, 1);

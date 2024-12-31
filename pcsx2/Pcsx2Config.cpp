@@ -2121,6 +2121,11 @@ std::string EmuFolders::GetPortableModePath()
 
 bool EmuFolders::SetDataDirectory(Error* error)
 {
+	if (!DataRoot.empty())
+	{
+		return FileSystem::EnsureDirectoryExists(DataRoot.c_str(), false, error);
+	}
+
 	if (!ShouldUsePortableMode())
 	{
 #if defined(_WIN32)

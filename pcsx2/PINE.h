@@ -12,6 +12,20 @@
 // conflict with each others
 #define PINE_DEFAULT_SLOT 28011
 
+/**
+	 * Maximum memory used by an IPC message request.
+	 * Equivalent to 50,000 Write64 requests.
+	 */
+#define MAX_IPC_SIZE 650000
+
+/**
+	  * Maximum memory used by an IPC message reply.
+	  * Equivalent to 50,000 Read64 replies.
+	  */
+#define MAX_IPC_RETURN_SIZE 1000000
+
+extern int g_pine_slot;
+
 namespace PINEServer
 {
 	bool IsInitialized();
@@ -19,4 +33,5 @@ namespace PINEServer
 
 	bool Initialize(int slot = PINE_DEFAULT_SLOT);
 	void Deinitialize();
+	void IpcLoop();
 } // namespace PINEServer

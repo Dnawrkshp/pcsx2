@@ -19,6 +19,7 @@
 #include "fmt/format.h"
 
 #if _WIN32
+#define exit_process() (ExitProcess(0))
 #define read_portable(a, b, c) (recv(a, (char*)b, c, 0))
 #define write_portable(a, b, c) (send(a, (const char*)b, c, 0))
 #define safe_close_portable(a) \
@@ -33,7 +34,9 @@
 #define bzero(b, len) (memset((b), '\0', (len)), (void)0)
 #include "common/RedtapeWindows.h"
 #include <WinSock2.h>
+#include <windows.h>
 #else
+#define exit_process() (kill(getpid(), SIGKILL))
 #define read_portable(a, b, c) (read(a, b, c))
 #define write_portable(a, b, c) (write(a, b, c))
 #define safe_close_portable(a) \
@@ -49,6 +52,47 @@
 #include <sys/un.h>
 #include <unistd.h>
 #endif
+
+#include "MTGS.h"
+#include "Common.h"
+#include "Memory.h"
+#include "pcsx2/Counters.h"
+#include "pcsx2/Recording/InputRecordingControls.h"
+#include "pcsx2/VMManager.h"
+#include "svnrev.h"
+#include "PINE.h"
+#include "pcsx2/FrameStep.h"
+#include "LayeredSettingsInterface.h"
+#include <GS/Renderers/Common/GSTexture.h>
+#include <GS/Renderers/Common/GSDevice.h>
+
+#include "SIO/Pad/Pad.h"
+#include "SIO/Pad/PadDualshock2.h"
+#include "SIO/Sio.h"
+
+#include "GS/Renderers/Common/GSRenderer.h"
+#include <Host.h>
+#include <INISettingsInterface.h>
+
+extern u8 FRAME_BUFFER_COPY[];
+extern bool g_eeRecExecuting;
+
+int g_pine_slot = 0;
+int g_disable_rendering = 0;
+int reset = 0;
+time_t g_pine_last_recv_seconds;
+time_t g_pine_last_connection;
+
+struct
+{
+	u8 interop_recv_buf[MAX_IPC_SIZE];
+	u8 interop_send_buf[MAX_IPC_RETURN_SIZE];
+	int recv_len;
+	int send_len;
+} interop_state;
+
+void SetPad(int port, int slot, u8* buf);
+uptr vtlb_getTblPtr(u32 addr);
 
 #define PINE_EMULATOR_NAME "pcsx2"
 
@@ -94,18 +138,6 @@ namespace PINEServer
 	static std::atomic_bool m_end{true};
 
 	/**
-	 * Maximum memory used by an IPC message request.
-	 * Equivalent to 50,000 Write64 requests.
-	 */
-#define MAX_IPC_SIZE 650000
-
-	/**
-	 * Maximum memory used by an IPC message reply.
-	 * Equivalent to 50,000 Read64 replies.
-	 */
-#define MAX_IPC_RETURN_SIZE 450000
-
-	/**
 	 * IPC return buffer.
 	 * A preallocated buffer used to store all IPC replies.
 	 * to the size of 50.000 MsgWrite64 IPC calls.
@@ -117,6 +149,13 @@ namespace PINEServer
 	 * A preallocated buffer used to store all IPC messages.
 	 */
 	static std::vector<u8> m_ipc_buffer;
+
+	/**
+	 * IPC return buffer.
+	 * A preallocated buffer used to store all IPC replies.
+	 * to the size of 50.000 MsgWrite64 IPC calls.
+	 */
+	std::vector<u8> m_mem_ret_buffer{};
 
 	/**
 	 * IPC Command messages opcodes.
@@ -142,7 +181,34 @@ namespace PINEServer
 		MsgUUID = 0xD, /**< Returns the game UUID. */
 		MsgGameVersion = 0xE, /**< Returns the game verion. */
 		MsgStatus = 0xF, /**< Returns the emulator status. */
+
+		MsgReadN = 0x64, /** */
+		MsgWriteN = 0x65, /** */
+		MsgFrameAdvance = 0x66, /** */
+		MsgResume = 0x67, /** */
+		MsgPause = 0x68, /** */
+		MsgRestart = 0x69, /** */
+		MsgStop = 0x6A, /** */
+		MsgGetFrameBuffer = 0x6B, /** */
+		MsgSetPad = 0x6C, /** */
+		MsgGetVmPtr = 0x6D, /** */
+		MsgSetDynamicSetting = 0x6E, /** */
 		MsgUnimplemented = 0xFF /**< Unimplemented IPC message. */
+	};
+
+	/**
+	 * IPC Command messages opcodes.
+	 * A list of possible operations possible by the IPC.
+	 * Each one of them is what we call an "opcode" and is the first
+	 * byte sent by the IPC to differentiate between commands.
+	 */
+	enum DynamicSettingId : unsigned char
+	{
+		DynamicSettingFrameSleepWait = 0, /**< If true, FrameStep sleeps while waiting for next frame command. */
+		DynamicSettingDisableRendering = 1, /**< If true, Renderer is set to NULL. */
+		DynamicSettingReloadConfig = 2, /**< Reloads PCSX2 config file */
+		DynamicSettingResetSocket = 3, /**< Resets the PINE socket */
+		DynamicSettingIdUnimplemented = 0xFF /**< Unimplemented DynamicSettingId. */
 	};
 
 	/**
@@ -181,6 +247,7 @@ namespace PINEServer
 	// Thread used to relay IPC commands.
 	void MainLoop();
 	void ClientLoop();
+	void TimeoutLoop();
 
 	/**
 	 * Internal function, Parses an IPC command.
@@ -250,6 +317,14 @@ bool PINEServer::Initialize(int slot)
 
 #ifdef _WIN32
 	if (!InitializeWinsock())
+	{
+		Console.WriteLn(Color_Red, "PINE: Cannot initialize winsock! Shutting down...");
+		Deinitialize();
+		return false;
+	}
+
+	WSADATA wsa;
+	if (WSAStartup(MAKEWORD(2, 2), &wsa) != 0)
 	{
 		Console.WriteLn(Color_Red, "PINE: Cannot initialize winsock! Shutting down...");
 		Deinitialize();
@@ -333,6 +408,10 @@ bool PINEServer::Initialize(int slot)
 	// request, as malloc is expansive when we optimize for µs.
 	m_ret_buffer.resize(MAX_IPC_RETURN_SIZE);
 	m_ipc_buffer.resize(MAX_IPC_SIZE);
+	m_mem_ret_buffer.resize(MAX_IPC_RETURN_SIZE);
+
+	// reset recv time
+	g_pine_last_recv_seconds = time(NULL);
 
 	// we start the thread
 	m_thread = std::thread(&PINEServer::MainLoop);
@@ -390,6 +469,30 @@ bool PINEServer::AcceptClient()
 	return false;
 }
 
+void PINEServer::IpcLoop()
+{
+	const std::span<u8> ipc_buffer_span(interop_state.interop_recv_buf);
+
+	const int len = interop_state.recv_len;
+	if (len > 0)
+	{
+		interop_state.recv_len = 0;
+		interop_state.send_len = 0;
+		PINEServer::IPCBuffer res;
+
+		// we remove 4 bytes to get the message size out of the IPC command
+		// size in ParseCommand.
+		// also, if we got a failed command, let's reset the state so we don't
+		// end up deadlocking by getting out of sync, eg when a client
+		// disconnects
+		res = ParseCommand(ipc_buffer_span.subspan(4), m_mem_ret_buffer, (u32)len - 4);
+
+		// move response into send buf
+		memcpy((u8*)interop_state.interop_send_buf, res.buffer.data(), res.size);
+		interop_state.send_len = res.size;
+	}
+}
+
 void PINEServer::MainLoop()
 {
 	while (!m_end.load(std::memory_order_acquire))
@@ -397,7 +500,9 @@ void PINEServer::MainLoop()
 		if (!AcceptClient())
 			continue;
 
+		g_pine_last_connection = time(NULL);
 		ClientLoop();
+		g_pine_last_connection = 0;
 
 		Console.WriteLn("PINE: Client disconnected.");
 		safe_close_portable(m_msgsock);
@@ -422,7 +527,11 @@ void PINEServer::ClientLoop()
 
 			// we recreate the socket if an error happens
 			if (tmp_length <= 0)
+			{
+				DevCon.WriteLn("PINE: Cannot recieve request.. restarting socket...");
+				exit_process();
 				return;
+			}
 
 			receive_length += tmp_length;
 
@@ -447,11 +556,22 @@ void PINEServer::ClientLoop()
 		// disconnects
 		if (receive_length != 0)
 		{
+			g_pine_last_recv_seconds = time(NULL);
 			res = ParseCommand(ipc_buffer_span.subspan(4), m_ret_buffer, (u32)end_length - 4);
 
 			// if we cannot send back our answer restart the socket
 			if (write_portable(m_msgsock, res.buffer.data(), res.size) < 0)
+			{
+				DevCon.WriteLn("PINE: Cannot send response.. restarting socket...");
+				exit_process();
 				return;
+			}
+		}
+
+		if (reset)
+		{
+			reset = 0;
+			return;
 		}
 	}
 }
@@ -470,11 +590,13 @@ void PINEServer::Deinitialize()
 
 	// shutdown() is needed, otherwise accept() will still block.
 #ifdef _WIN32
-	if (m_sock != INVALID_SOCKET)
-		shutdown(m_sock, SD_BOTH);
+	//if (m_sock != INVALID_SOCKET)
+	//	shutdown(m_sock, SD_BOTH);
+	WSACleanup();
 #else
-	if (m_sock >= 0)
-		shutdown(m_sock, SHUT_RDWR);
+	//if (m_sock >= 0)
+	//	shutdown(m_sock, SHUT_RDWR);
+	unlink(m_socket_name.c_str());
 #endif
 
 	safe_close_portable(m_sock);
@@ -505,7 +627,8 @@ PINEServer::IPCBuffer PINEServer::ParseCommand(std::span<u8> buf, std::vector<u8
 		//        |  return value (VLE)
 		//        |  |
 		// reply: XX ZZ ZZ ZZ ZZ
-		switch ((IPCCommand)buf[buf_cnt - 1])
+		IPCCommand cmd = (IPCCommand)buf[buf_cnt - 1];
+		switch (cmd)
 		{
 			case MsgRead8:
 			{
@@ -695,25 +818,276 @@ PINEServer::IPCBuffer PINEServer::ParseCommand(std::span<u8> buf, std::vector<u8
 			}
 			case MsgStatus:
 			{
-				if (!SafetyChecks(buf_cnt, 0, ret_cnt, 4, buf_size)) [[unlikely]]
+				if (!SafetyChecks(buf_cnt, 0, ret_cnt, 8, buf_size))
 					goto error;
 				EmuStatus status;
 
-				switch (VMManager::GetState())
+				if (VMManager::HasValidVM())
 				{
-					case VMState::Running:
-						status = EmuStatus::Running;
-						break;
-					case VMState::Paused:
-						status = EmuStatus::Paused;
-						break;
-					default:
-						status = EmuStatus::Shutdown;
-						break;
+					if (g_FrameStep.IsPaused())
+						status = Paused;
+					else
+					{
+						switch (VMManager::GetState())
+						{
+							case VMState::Running:
+								status = EmuStatus::Running;
+								break;
+							case VMState::Paused:
+								status = EmuStatus::Paused;
+								break;
+							default:
+								status = EmuStatus::Shutdown;
+								break;
+						}
+					}
+				}
+				else
+				{
+					status = Shutdown;
 				}
 
 				ToResultVector(ret_buffer, status, ret_cnt);
-				ret_cnt += 4;
+				ToResultVector(ret_buffer, g_FrameCount, ret_cnt + 4);
+				ToResultVector(ret_buffer, g_eeRecExecuting, ret_cnt + 8);
+				ret_cnt += 9;
+				break;
+			}
+
+			case MsgReadN:
+			{
+				if (!VMManager::HasValidVM())
+					goto error;
+				if (!SafetyChecks(buf_cnt, 6, ret_cnt, 1, buf_size))
+					goto error;
+
+				const u32 a = FromSpan<u32>(buf, buf_cnt);
+				const u16 l = FromSpan<u16>(buf, buf_cnt + 4);
+				if (!SafetyChecks(buf_cnt, 6, ret_cnt, l, buf_size))
+					goto error;
+				if (!vtlb_memSafeReadBytes(a, reinterpret_cast<mem8_t*>(&ret_buffer[ret_cnt]), (u32)l))
+					goto error;
+				//if (!vtlb_ramRead(a, reinterpret_cast<mem8_t*>(&ret_buffer[ret_cnt]), (u32)l))
+				//	goto error;
+				ret_cnt += l;
+				buf_cnt += 6;
+				break;
+			}
+			case MsgWriteN:
+			{
+				if (!VMManager::HasValidVM())
+					goto error;
+				if (!SafetyChecks(buf_cnt, 6, ret_cnt, 1, buf_size))
+					goto error;
+
+				const u32 a = FromSpan<u32>(buf, buf_cnt);
+				const u32 c = FromSpan<u16>(buf, buf_cnt + 4);
+				if (!SafetyChecks(buf_cnt, c + 6, ret_cnt, 0, buf_size))
+					goto error;
+				buf_cnt += 6;
+				vtlb_memSafeWriteBytes(a, reinterpret_cast<mem8_t*>(&buf[buf_cnt]), (u32)c);
+				//if (!vtlb_ramWrite(a, reinterpret_cast<mem8_t*>(&buf[buf_cnt]), (u32)c))
+				//	goto error;
+				buf_cnt += c;
+				u8 res = 1;
+				ToResultVector(ret_buffer, res, ret_cnt);
+				ret_cnt += 1;
+				break;
+			}
+			case MsgFrameAdvance:
+			{
+				if (!VMManager::HasValidVM())
+					goto error;
+				if (!SafetyChecks(buf_cnt, 0, ret_cnt, 1, buf_size))
+					goto error;
+				g_FrameStep.FrameAdvance();
+				u8 res = 1;
+				ToResultVector(ret_buffer, res, ret_cnt);
+				ret_cnt += 1;
+				break;
+			}
+			case MsgSetDynamicSetting:
+			{
+				if (!SafetyChecks(buf_cnt, 1, ret_cnt, 1, buf_size))
+					goto error;
+
+				// get args
+				const enum DynamicSettingId settingId = (enum DynamicSettingId)FromSpan<u8>(buf, buf_cnt);
+
+				switch (settingId)
+				{
+					case DynamicSettingFrameSleepWait:
+					{
+						const u8 value = FromSpan<u8>(buf, buf_cnt + 1);
+						g_FrameStep.SetSleepWait(value != 0);
+						buf_cnt += 1;
+						break;
+					}
+					case DynamicSettingDisableRendering:
+					{
+						const u8 value = FromSpan<u8>(buf, buf_cnt + 1);
+						g_disable_rendering = value != 0;
+
+						buf_cnt += 1;
+						break;
+					}
+					case DynamicSettingReloadConfig:
+					{
+						LayeredSettingsInterface* lsi = (LayeredSettingsInterface*)Host::GetSettingsInterface();
+						INISettingsInterface* si = (INISettingsInterface*)lsi->GetLayer(LayeredSettingsInterface::LAYER_BASE);
+						if (si)
+						{
+							si->Clear();
+							si->Load();
+						}
+						VMManager::ApplySettings();
+						break;
+					}
+					case DynamicSettingResetSocket:
+					{
+						DevCon.WriteLn("PINE: Recv DynamicSettingResetSocket.. restarting socket...");
+						reset = 1;
+						break;
+					}
+					default:
+					{
+						break;
+					}
+				}
+
+				buf_cnt += 1;
+
+				u8 res = 1;
+				ToResultVector(ret_buffer, res, ret_cnt);
+				ret_cnt += 1;
+				break;
+			}
+			case MsgResume:
+			{
+				if (!VMManager::HasValidVM())
+					goto error;
+				if (!SafetyChecks(buf_cnt, 0, ret_cnt, 1, buf_size))
+					goto error;
+				g_FrameStep.Resume();
+				u8 res = 1;
+				ToResultVector(ret_buffer, res, ret_cnt);
+				ret_cnt += 1;
+				break;
+			}
+			case MsgPause:
+			{
+				if (!VMManager::HasValidVM())
+					goto error;
+				if (!SafetyChecks(buf_cnt, 0, ret_cnt, 1, buf_size))
+					goto error;
+				g_FrameStep.Pause();
+				u8 res = 1;
+				ToResultVector(ret_buffer, res, ret_cnt);
+				ret_cnt += 1;
+				break;
+			}
+			case MsgRestart:
+			{
+				if (!VMManager::HasValidVM())
+					goto error;
+				//g_Conf->EmuOptions.UseBOOT2Injection = true;
+				VMManager::Reset();
+				//CoreThread.ResetQuick();
+				//CoreThread.Resume();
+				g_FrameStep.Resume();
+
+				u8 res = 1;
+				ToResultVector(ret_buffer, res, ret_cnt);
+				ret_cnt += 1;
+				break;
+			}
+			case MsgStop:
+			{
+				if (!SafetyChecks(buf_cnt, 0, ret_cnt, 1, buf_size))
+					goto error;
+				//g_Conf->EmuOptions.UseBOOT2Injection = true;
+				//CoreThread.ResetQuick();
+
+
+				VMManager::Shutdown(false);
+
+				//if (GSFrame* gsframe = wxGetApp().GetGsFramePtr())
+				//	gsframe->Show(false);
+
+				//CoreThread.Resume();
+				g_FrameStep.Resume();
+
+				u8 res = 1;
+				ToResultVector(ret_buffer, res, ret_cnt);
+				ret_cnt += 1;
+				break;
+			}
+			case MsgGetFrameBuffer:
+			{
+				int bitCount = 512 * 448 * 4;
+				if (!VMManager::HasValidVM())
+					goto error;
+				if (!SafetyChecks(buf_cnt, 0, ret_cnt, bitCount, buf_size))
+					goto error;
+
+				memcpy(&ret_buffer[ret_cnt], FRAME_BUFFER_COPY, bitCount);
+				ret_cnt += bitCount;
+				break;
+			}
+			case MsgSetPad:
+			{
+				if (!VMManager::HasValidVM())
+					goto error;
+				if (!SafetyChecks(buf_cnt, 36, ret_cnt, 1, buf_size))
+					goto error;
+
+				// get args
+				const u16 port = FromSpan<u16>(buf, buf_cnt);
+				const u16 slot = FromSpan<u16>(buf, buf_cnt + 2);
+				buf_cnt += 4;
+
+				// set pad
+				SetPad(port, slot, (u8*)&buf[buf_cnt]);
+
+				buf_cnt += 32;
+				u8 res = 1;
+				ToResultVector(ret_buffer, res, ret_cnt);
+				ret_cnt += 1;
+				break;
+			}
+			case MsgGetVmPtr:
+			{
+				//if (!VMManager::HasValidVM())
+				//	goto error;
+				if (!SafetyChecks(buf_cnt, 0, ret_cnt, 8 * 5, buf_size))
+					goto error;
+
+				uptr res = 0;
+				if (VMManager::HasValidVM())
+				{
+					res = vtlb_getTblPtr(0x100000);
+					if (res > 0)
+						res -= 0x100000;
+				}
+
+				ToResultVector(ret_buffer, res, ret_cnt);
+				ret_cnt += 8;
+
+				res = (uptr)&g_FrameCount;
+				ToResultVector(ret_buffer, res, ret_cnt);
+				ret_cnt += 8;
+
+				res = (uptr)&g_eeRecExecuting;
+				ToResultVector(ret_buffer, res, ret_cnt);
+				ret_cnt += 8;
+
+				res = (uptr)&interop_state;
+				ToResultVector(ret_buffer, res, ret_cnt);
+				ret_cnt += 8;
+
+				res = (uptr)&FRAME_BUFFER_COPY;
+				ToResultVector(ret_buffer, res, ret_cnt);
+				ret_cnt += 8;
 				break;
 			}
 			default:
@@ -724,4 +1098,29 @@ PINEServer::IPCBuffer PINEServer::ParseCommand(std::span<u8> buf, std::vector<u8
 		}
 	}
 	return IPCBuffer{(int)ret_cnt, MakeOkIPC(ret_buffer, ret_cnt)};
+}
+
+void SetPad(int port, int slot, u8* buf)
+{
+	PadBase* pad = Pad::GetPad(port);
+	pad->SetRawAnalogs(std::tuple<u8, u8>(buf[6], buf[7]), std::tuple<u8, u8>(buf[4], buf[5]));
+
+	pad->Set(PadDualshock2::Inputs::PAD_RIGHT, buf[8]);
+	pad->Set(PadDualshock2::Inputs::PAD_LEFT, buf[9]);
+	pad->Set(PadDualshock2::Inputs::PAD_UP, buf[10]);
+	pad->Set(PadDualshock2::Inputs::PAD_DOWN, buf[11]);
+	pad->Set(PadDualshock2::Inputs::PAD_START, buf[20]);
+	pad->Set(PadDualshock2::Inputs::PAD_SELECT, buf[21]);
+	pad->Set(PadDualshock2::Inputs::PAD_R3, buf[23]);
+	pad->Set(PadDualshock2::Inputs::PAD_L3, buf[22]);
+
+	pad->Set(PadDualshock2::Inputs::PAD_SQUARE, buf[15]);
+	pad->Set(PadDualshock2::Inputs::PAD_CROSS, buf[14]);
+	pad->Set(PadDualshock2::Inputs::PAD_CIRCLE, buf[13]);
+	pad->Set(PadDualshock2::Inputs::PAD_TRIANGLE, buf[12]);
+
+	pad->Set(PadDualshock2::Inputs::PAD_R1, buf[17]);
+	pad->Set(PadDualshock2::Inputs::PAD_L1, buf[16]);
+	pad->Set(PadDualshock2::Inputs::PAD_R2, buf[19]);
+	pad->Set(PadDualshock2::Inputs::PAD_L2, buf[18]);
 }

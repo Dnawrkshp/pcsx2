@@ -61,6 +61,7 @@ static constexpr const char* RUNTIME_RESOURCES_URL =
 	"https://github.com/PCSX2/pcsx2-windows-dependencies/releases/download/runtime-resources/";
 
 EmuThread* g_emu_thread = nullptr;
+extern int g_pine_slot;
 
 //////////////////////////////////////////////////////////////////////////
 // Local function declarations
@@ -601,7 +602,7 @@ void Host::CheckForSettingsChanges(const Pcsx2Config& old_config)
 
 bool EmuThread::shouldRenderToMain() const
 {
-	return !Host::GetBoolSettingValue("UI", "RenderToSeparateWindow", false) && !QtHost::InNoGUIMode();
+	return true; //return !Host::GetBoolSettingValue("UI", "RenderToSeparateWindow", false) && !QtHost::InNoGUIMode();
 }
 
 void EmuThread::toggleSoftwareRendering()
@@ -2059,6 +2060,7 @@ void QtHost::PrintCommandLineHelp(const std::string_view progname)
 #ifdef ENABLE_RAINTEGRATION
 	std::fprintf(stderr, "  -raintegration: Use RAIntegration instead of built-in achievement support.\n");
 #endif
+	std::fprintf(stderr, "  -data: Uses the specified path as the data root.\n");
 	std::fprintf(stderr, "  --: Signals that no more arguments will follow and the remaining\n"
 						 "    parameters make up the filename. Use when the filename contains\n"
 						 "    spaces or starts with a dash.\n");
@@ -2193,6 +2195,11 @@ bool QtHost::ParseCommandLineOptions(const QStringList& args, std::shared_ptr<VM
 				s_boot_and_debug = true;
 				continue;
 			}
+			else if (CHECK_ARG(QStringLiteral("-pineslot")))
+			{
+				g_pine_slot = (++it)->toInt();
+				continue;
+			}
 			else if (CHECK_ARG(QStringLiteral("-updatecleanup")))
 			{
 				s_cleanup_after_update = AutoUpdaterDialog::isSupported();
@@ -2205,6 +2212,11 @@ bool QtHost::ParseCommandLineOptions(const QStringList& args, std::shared_ptr<VM
 				continue;
 			}
 #endif
+			else if (CHECK_ARG_PARAM(QStringLiteral("-data")))
+			{
+				EmuFolders::DataRoot = (++it)->toStdString();
+				continue;
+			}
 			else if (CHECK_ARG(QStringLiteral("--")))
 			{
 				no_more_args = true;
@@ -2243,6 +2255,20 @@ bool QtHost::ParseCommandLineOptions(const QStringList& args, std::shared_ptr<VM
 						   QStringLiteral("Cannot use batch mode, because no boot filename was specified."));
 		return false;
 	}
+
+#ifndef _WIN32
+
+	// we need to know the data path at startup
+	// otherwise PCSX2 will default to another directory for linux
+	// fail to prevent users from manually starting PCSX2 with the wrong config
+	if (EmuFolders::DataRoot.empty())
+	{
+		QMessageBox::critical(nullptr, QStringLiteral("Error"),
+			QStringLiteral("Cannot run embedded PCSX2 with specifying the data path."));
+		return false;
+	}
+
+#endif
 
 	return true;
 }

@@ -16,6 +16,7 @@ void writeCache16(u32 mem, u16 value, bool validPFN = true);
 void writeCache32(u32 mem, u32 value, bool validPFN = true);
 void writeCache64(u32 mem, const u64 value, bool validPFN = true);
 void writeCache128(u32 mem, const mem128_t* value, bool validPFN = true);
+void writeCache(u32 mem, const mem8_t* data, u32 count);
 u8 readCache8(u32 mem, bool validPFN = true);
 u16 readCache16(u32 mem, bool validPFN = true);
 u32 readCache32(u32 mem, bool validPFN = true);

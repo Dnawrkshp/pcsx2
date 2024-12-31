@@ -13,7 +13,7 @@
 #include "SettingsWindow.h"
 
 static constexpr int MINIMUM_EE_CYCLE_RATE = -3;
-static constexpr int MAXIMUM_EE_CYCLE_RATE = 3;
+static constexpr int MAXIMUM_EE_CYCLE_RATE = 4;
 static constexpr int DEFAULT_EE_CYCLE_RATE = 0;
 static constexpr int DEFAULT_EE_CYCLE_SKIP = 0;
 static constexpr u32 DEFAULT_FRAME_LATENCY = 2;
