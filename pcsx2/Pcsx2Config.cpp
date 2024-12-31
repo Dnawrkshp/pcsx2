@@ -2107,8 +2107,9 @@ bool EmuFolders::SetResourcesDirectory()
 
 bool EmuFolders::ShouldUsePortableMode()
 {
+	return true;
 	// Check whether portable.ini exists in the program directory.
-	return FileSystem::FileExists(Path::Combine(AppRoot, "portable.ini").c_str()) || FileSystem::FileExists(Path::Combine(AppRoot, "portable.txt").c_str());
+	//return FileSystem::FileExists(Path::Combine(AppRoot, "portable.ini").c_str()) || FileSystem::FileExists(Path::Combine(AppRoot, "portable.txt").c_str());
 }
 
 std::string EmuFolders::GetPortableModePath()
