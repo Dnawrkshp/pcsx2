@@ -36,6 +36,7 @@
 #include <WinSock2.h>
 #include <windows.h>
 #else
+#include <signal.h>
 #define exit_process() (kill(getpid(), SIGKILL))
 #define read_portable(a, b, c) (read(a, b, c))
 #define write_portable(a, b, c) (write(a, b, c))

@@ -32,11 +32,11 @@ void FrameStep::HandlePausing()
 		{
 			if (sleepWhileWaiting)
 			{
-				Threading::Sleep(1);
+				Threading::Sleep(0);
 			} // sleep until resumeEmulation is true
 			else
 			{
-				Threading::Sleep(0);
+				//Threading::Sleep(0);
 			}
 			//else Threading::Sleep(1); // sleep until resumeEmulation is true
 			// otherwise just eat cycle until we can
