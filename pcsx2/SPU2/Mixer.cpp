@@ -594,8 +594,6 @@ __forceinline void spu2Mix()
 
 	StereoOut32 Ext(Cores[0].Mix(VoiceData[0], InputData[0], StereoOut32::Empty));
 
-	PINEServer::WriteStereoFrame(Ext.Left, Ext.Right);
-
 	if ((PlayMode & 4) || (Cores[0].Mute != 0))
 		Ext = StereoOut32::Empty;
 	else
@@ -638,6 +636,8 @@ __forceinline void spu2Mix()
 	// Log final output to wavefile.
 	WaveDump::WriteCore(1, CoreSrc_External, Out);
 #endif
+
+	PINEServer::WriteStereoFrame(Out.Left, Out.Right);
 
 	spu2Output(Out);
 
