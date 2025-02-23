@@ -83,6 +83,11 @@ int g_disable_rendering = 0;
 int reset = 0;
 time_t g_pine_last_recv_seconds;
 time_t g_pine_last_connection;
+int g_stereo_idx = 0;
+int g_stereo_idx_back = 0;
+int g_stereo_frame = 0;
+s16 g_stereo_buf[1024 * 8];
+s16 g_stereo_buf_back[1024 * 8];
 
 struct
 {
@@ -1089,6 +1094,14 @@ PINEServer::IPCBuffer PINEServer::ParseCommand(std::span<u8> buf, std::vector<u8
 				res = (uptr)&FRAME_BUFFER_COPY;
 				ToResultVector(ret_buffer, res, ret_cnt);
 				ret_cnt += 8;
+
+				res = (uptr)&g_stereo_buf_back;
+				ToResultVector(ret_buffer, res, ret_cnt);
+				ret_cnt += 8;
+
+				res = (uptr)&g_stereo_idx_back;
+				ToResultVector(ret_buffer, res, ret_cnt);
+				ret_cnt += 8;
 				break;
 			}
 			default:
@@ -1099,6 +1112,32 @@ PINEServer::IPCBuffer PINEServer::ParseCommand(std::span<u8> buf, std::vector<u8
 		}
 	}
 	return IPCBuffer{(int)ret_cnt, MakeOkIPC(ret_buffer, ret_cnt)};
+}
+
+
+void PINEServer::WriteStereoFrame(const s32 left, const s32 right)
+{
+	const s16 l16 = std::clamp(left, -0x8000, 0x7fff);
+	const s16 r16 = std::clamp(right, -0x8000, 0x7fff);
+
+	// new frame
+	if (g_stereo_frame != g_FrameCount)
+	{
+		g_stereo_idx_back = g_stereo_idx;
+		memcpy(g_stereo_buf_back, g_stereo_buf, sizeof(g_stereo_buf_back));
+
+		g_stereo_idx = 0;
+		g_stereo_frame = g_FrameCount;
+	}
+
+	// ran out of room
+	if ((g_stereo_idx + 2)*2 > sizeof(g_stereo_buf))
+	{
+		return;
+	}
+
+	g_stereo_buf[g_stereo_idx++] = l16;
+	g_stereo_buf[g_stereo_idx++] = r16;
 }
 
 void SetPad(int port, int slot, u8* buf)

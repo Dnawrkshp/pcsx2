@@ -6,6 +6,7 @@
 #include "SPU2/defs.h"
 #include "SPU2/spu2.h"
 #include "SPU2/interpolate_table.h"
+#include "PINE.h"
 
 #include "common/Assertions.h"
 
@@ -592,6 +593,8 @@ __forceinline void spu2Mix()
 	MixCoreVoices(VoiceData[1], 1);
 
 	StereoOut32 Ext(Cores[0].Mix(VoiceData[0], InputData[0], StereoOut32::Empty));
+
+	PINEServer::WriteStereoFrame(Ext.Left, Ext.Right);
 
 	if ((PlayMode & 4) || (Cores[0].Mute != 0))
 		Ext = StereoOut32::Empty;

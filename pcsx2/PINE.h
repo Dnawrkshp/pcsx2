@@ -34,4 +34,5 @@ namespace PINEServer
 	bool Initialize(int slot = PINE_DEFAULT_SLOT);
 	void Deinitialize();
 	void IpcLoop();
+	void WriteStereoFrame(s32 left, s32 right);
 } // namespace PINEServer
