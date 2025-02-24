@@ -8,6 +8,7 @@
 #include "Elfheader.h"
 #include "PINE.h"
 #include "VMManager.h"
+#include "SPU2/spu2.h"
 
 #include <atomic>
 #include <cstdio>
@@ -214,6 +215,7 @@ namespace PINEServer
 		DynamicSettingDisableRendering = 1, /**< If true, Renderer is set to NULL. */
 		DynamicSettingReloadConfig = 2, /**< Reloads PCSX2 config file */
 		DynamicSettingResetSocket = 3, /**< Resets the PINE socket */
+		DynamicSettingSetVolume = 4, /**< Sets the output volume */
 		DynamicSettingIdUnimplemented = 0xFF /**< Unimplemented DynamicSettingId. */
 	};
 
@@ -933,7 +935,6 @@ PINEServer::IPCBuffer PINEServer::ParseCommand(std::span<u8> buf, std::vector<u8
 					{
 						const u8 value = FromSpan<u8>(buf, buf_cnt + 1);
 						g_disable_rendering = value != 0;
-
 						buf_cnt += 1;
 						break;
 					}
@@ -951,8 +952,18 @@ PINEServer::IPCBuffer PINEServer::ParseCommand(std::span<u8> buf, std::vector<u8
 					}
 					case DynamicSettingResetSocket:
 					{
-						DevCon.WriteLn("PINE: Recv DynamicSettingResetSocket.. restarting socket...");
+						Console.WriteLn("PINE: Recv DynamicSettingResetSocket.. restarting socket...");
 						reset = 1;
+						break;
+					}
+					case DynamicSettingSetVolume:
+					{
+						const u8 value = FromSpan<u8>(buf, buf_cnt + 1);
+						EmuConfig.SPU2.FastForwardVolume = value;
+						EmuConfig.SPU2.OutputVolume = value;
+						SPU2::SetOutputVolume(value);
+						buf_cnt += 1;
+						//Console.WriteLn("PINE: Recv DynamicSettingSetVolume.. %d", value);
 						break;
 					}
 					default:
