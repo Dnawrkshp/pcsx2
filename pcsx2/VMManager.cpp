@@ -3678,14 +3678,14 @@ const std::vector<u32>& VMManager::Internal::GetSoftwareRendererProcessorList()
 void VMManager::ReloadPINE()
 {
 	const bool needs_reinit = (EmuConfig.EnablePINE != PINEServer::IsInitialized() ||
-							   PINEServer::GetSlot() != EmuConfig.PINESlot);
+							   PINEServer::GetSlot() != g_pine_slot);
 	if (!needs_reinit)
 		return;
 
 	PINEServer::Deinitialize();
 
 	if (EmuConfig.EnablePINE)
-		PINEServer::Initialize(EmuConfig.PINESlot);
+		PINEServer::Initialize(g_pine_slot);
 }
 
 void VMManager::InitializeDiscordPresence()

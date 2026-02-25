@@ -6,6 +6,7 @@
 #include "SPU2/defs.h"
 #include "SPU2/spu2.h"
 #include "SPU2/interpolate_table.h"
+#include "PINE.h"
 
 #include "common/Assertions.h"
 
@@ -603,6 +604,7 @@ void spu2Mix()
 	WaveDump::WriteCore(1, CoreSrc_External, Out);
 #endif
 
+	PINEServer::WriteStereoFrame(Out.Left, Out.Right);
 	spu2Output(Out);
 
 	// Update AutoDMA output positioning

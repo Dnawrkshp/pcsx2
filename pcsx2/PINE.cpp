@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2002-2026 PCSX2 Dev Team
+// SPDX-FileCopyrightText: 2002-2024 PCSX2 Dev Team
 // SPDX-License-Identifier: GPL-3.0+
 
 #include "BuildVersion.h"
@@ -6,11 +6,9 @@
 #include "Host.h"
 #include "Memory.h"
 #include "Elfheader.h"
-#include "SaveState.h"
 #include "PINE.h"
 #include "VMManager.h"
-#include "common/Error.h"
-#include "common/Threading.h"
+#include "SPU2/spu2.h"
 
 #include <atomic>
 #include <cstdio>
@@ -21,7 +19,8 @@
 
 #include "fmt/format.h"
 
-#if defined(_WIN32)
+#if _WIN32
+#define exit_process() (ExitProcess(0))
 #define read_portable(a, b, c) (recv(a, (char*)b, c, 0))
 #define write_portable(a, b, c) (send(a, (const char*)b, c, 0))
 #define safe_close_portable(a) \
@@ -33,24 +32,13 @@
 			(a) = INVALID_SOCKET; \
 		} \
 	} while (0)
+#define bzero(b, len) (memset((b), '\0', (len)), (void)0)
 #include "common/RedtapeWindows.h"
 #include <WinSock2.h>
-#elif defined(__linux__) || defined(__FreeBSD__)
-#define read_portable(a, b, c) (read(a, b, c))
-#define write_portable(a, b, c) (send(a, b, c, MSG_NOSIGNAL))
-#define safe_close_portable(a) \
-	do \
-	{ \
-		if ((a) >= 0) \
-		{ \
-			close((a)); \
-			(a) = -1; \
-		} \
-	} while (0)
-#include <sys/socket.h>
-#include <sys/un.h>
-#include <unistd.h>
+#include <windows.h>
 #else
+#include <signal.h>
+#define exit_process() (kill(getpid(), SIGKILL))
 #define read_portable(a, b, c) (read(a, b, c))
 #define write_portable(a, b, c) (write(a, b, c))
 #define safe_close_portable(a) \
@@ -66,6 +54,52 @@
 #include <sys/un.h>
 #include <unistd.h>
 #endif
+
+#include "MTGS.h"
+#include "Common.h"
+#include "Memory.h"
+#include "pcsx2/Counters.h"
+#include "pcsx2/Recording/InputRecordingControls.h"
+#include "pcsx2/VMManager.h"
+#include "svnrev.h"
+#include "PINE.h"
+#include "pcsx2/FrameStep.h"
+#include "LayeredSettingsInterface.h"
+#include <GS/Renderers/Common/GSTexture.h>
+#include <GS/Renderers/Common/GSDevice.h>
+
+#include "SIO/Pad/Pad.h"
+#include "SIO/Pad/PadDualshock2.h"
+#include "SIO/Sio.h"
+
+#include "GS/Renderers/Common/GSRenderer.h"
+#include <Host.h>
+#include <INISettingsInterface.h>
+
+extern u8 FRAME_BUFFER_COPY[];
+extern bool g_eeRecExecuting;
+
+int g_pine_slot = 0;
+int g_disable_rendering = 0;
+int reset = 0;
+time_t g_pine_last_recv_seconds;
+time_t g_pine_last_connection;
+int g_stereo_idx = 0;
+int g_stereo_idx_back = 0;
+int g_stereo_frame = 0;
+s16 g_stereo_buf[1024 * 8];
+s16 g_stereo_buf_back[1024 * 8];
+
+struct
+{
+	u8 interop_recv_buf[MAX_IPC_SIZE];
+	u8 interop_send_buf[MAX_IPC_RETURN_SIZE];
+	int recv_len;
+	int send_len;
+} interop_state;
+
+void SetPad(int port, int slot, u8* buf);
+uptr vtlb_getTblPtr(u32 addr);
 
 #define PINE_EMULATOR_NAME "pcsx2"
 
@@ -90,50 +124,45 @@ static bool InitializeWinsock()
 
 namespace PINEServer
 {
-	static std::thread s_thread;
-	static int s_slot;
+	std::thread m_thread;
+	int m_slot;
 
 #ifdef _WIN32
 	// windows claim to have support for AF_UNIX sockets but that is a blatant lie,
 	// their SDK won't even run their own examples, so we go on TCP sockets.
-	static SOCKET s_sock = INVALID_SOCKET;
+	static SOCKET m_sock = INVALID_SOCKET;
 	// the message socket used in thread's accept().
-	static SOCKET s_msgsock = INVALID_SOCKET;
+	static SOCKET m_msgsock = INVALID_SOCKET;
 #else
 	// absolute path of the socket. Stored in XDG_RUNTIME_DIR, if unset /tmp
-	static std::string s_socket_name;
-	static int s_sock = -1;
+	static std::string m_socket_name;
+	static int m_sock = -1;
 	// the message socket used in thread's accept().
-	static int s_msgsock = -1;
+	static int m_msgsock = -1;
 #endif
 
 	// Whether the socket processing thread should stop executing/is stopped.
-	static std::atomic_bool s_end{true};
-
-	/**
-	 * Maximum memory used by an IPC message request.
-	 * Equivalent to 50,000 Write64 requests.
-	 */
-#define MAX_IPC_SIZE 650000
-
-	/**
-	 * Maximum memory used by an IPC message reply.
-	 * Equivalent to 50,000 Read64 replies.
-	 */
-#define MAX_IPC_RETURN_SIZE 450000
+	static std::atomic_bool m_end{true};
 
 	/**
 	 * IPC return buffer.
 	 * A preallocated buffer used to store all IPC replies.
 	 * to the size of 50.000 MsgWrite64 IPC calls.
 	 */
-	static std::vector<u8> s_ret_buffer;
+	static std::vector<u8> m_ret_buffer;
 
 	/**
 	 * IPC messages buffer.
 	 * A preallocated buffer used to store all IPC messages.
 	 */
-	static std::vector<u8> s_ipc_buffer;
+	static std::vector<u8> m_ipc_buffer;
+
+	/**
+	 * IPC return buffer.
+	 * A preallocated buffer used to store all IPC replies.
+	 * to the size of 50.000 MsgWrite64 IPC calls.
+	 */
+	std::vector<u8> m_mem_ret_buffer{};
 
 	/**
 	 * IPC Command messages opcodes.
@@ -159,7 +188,35 @@ namespace PINEServer
 		MsgUUID = 0xD, /**< Returns the game UUID. */
 		MsgGameVersion = 0xE, /**< Returns the game verion. */
 		MsgStatus = 0xF, /**< Returns the emulator status. */
+
+		MsgReadN = 0x64, /** */
+		MsgWriteN = 0x65, /** */
+		MsgFrameAdvance = 0x66, /** */
+		MsgResume = 0x67, /** */
+		MsgPause = 0x68, /** */
+		MsgRestart = 0x69, /** */
+		MsgStop = 0x6A, /** */
+		MsgGetFrameBuffer = 0x6B, /** */
+		MsgSetPad = 0x6C, /** */
+		MsgGetVmPtr = 0x6D, /** */
+		MsgSetDynamicSetting = 0x6E, /** */
 		MsgUnimplemented = 0xFF /**< Unimplemented IPC message. */
+	};
+
+	/**
+	 * IPC Command messages opcodes.
+	 * A list of possible operations possible by the IPC.
+	 * Each one of them is what we call an "opcode" and is the first
+	 * byte sent by the IPC to differentiate between commands.
+	 */
+	enum DynamicSettingId : unsigned char
+	{
+		DynamicSettingFrameSleepWait = 0, /**< If true, FrameStep sleeps while waiting for next frame command. */
+		DynamicSettingDisableRendering = 1, /**< If true, Renderer is set to NULL. */
+		DynamicSettingReloadConfig = 2, /**< Reloads PCSX2 config file */
+		DynamicSettingResetSocket = 3, /**< Resets the PINE socket */
+		DynamicSettingSetVolume = 4, /**< Sets the output volume */
+		DynamicSettingIdUnimplemented = 0xFF /**< Unimplemented DynamicSettingId. */
 	};
 
 	/**
@@ -198,6 +255,7 @@ namespace PINEServer
 	// Thread used to relay IPC commands.
 	void MainLoop();
 	void ClientLoop();
+	void TimeoutLoop();
 
 	/**
 	 * Internal function, Parses an IPC command.
@@ -262,8 +320,8 @@ namespace PINEServer
 
 bool PINEServer::Initialize(int slot)
 {
-	s_end.store(false, std::memory_order_release);
-	s_slot = slot;
+	m_end.store(false, std::memory_order_release);
+	m_slot = slot;
 
 #ifdef _WIN32
 	if (!InitializeWinsock())
@@ -273,8 +331,16 @@ bool PINEServer::Initialize(int slot)
 		return false;
 	}
 
-	s_sock = socket(AF_INET, SOCK_STREAM, 0);
-	if ((s_sock == INVALID_SOCKET) || slot > 65536)
+	WSADATA wsa;
+	if (WSAStartup(MAKEWORD(2, 2), &wsa) != 0)
+	{
+		Console.WriteLn(Color_Red, "PINE: Cannot initialize winsock! Shutting down...");
+		Deinitialize();
+		return false;
+	}
+
+	m_sock = socket(AF_INET, SOCK_STREAM, 0);
+	if ((m_sock == INVALID_SOCKET) || slot > 65536)
 	{
 		Console.WriteLn(Color_Red, "PINE: Cannot open socket! Shutting down...");
 		Deinitialize();
@@ -286,7 +352,7 @@ bool PINEServer::Initialize(int slot)
 	server.sin_addr.s_addr = htonl(INADDR_LOOPBACK); // localhost only
 	server.sin_port = htons(slot);
 
-	if (bind(s_sock, (struct sockaddr*)&server, sizeof(server)) == SOCKET_ERROR)
+	if (bind(m_sock, (struct sockaddr*)&server, sizeof(server)) == SOCKET_ERROR)
 	{
 		Console.WriteLn(Color_Red, "PINE: Error while binding to socket! Shutting down...");
 		Deinitialize();
@@ -303,32 +369,32 @@ bool PINEServer::Initialize(int slot)
 	// fallback in case macOS or other OSes don't implement the XDG base
 	// spec
 	if (runtime_dir == nullptr)
-		s_socket_name = "/tmp/" PINE_EMULATOR_NAME ".sock";
+		m_socket_name = "/tmp/" PINE_EMULATOR_NAME ".sock";
 	else
 	{
-		s_socket_name = runtime_dir;
-		s_socket_name += "/" PINE_EMULATOR_NAME ".sock";
+		m_socket_name = runtime_dir;
+		m_socket_name += "/" PINE_EMULATOR_NAME ".sock";
 	}
 
 	if (slot != PINE_DEFAULT_SLOT)
-		s_socket_name += "." + std::to_string(slot);
+		m_socket_name += "." + std::to_string(slot);
 
 	struct sockaddr_un server;
 
-	s_sock = socket(AF_UNIX, SOCK_STREAM, 0);
-	if (s_sock < 0)
+	m_sock = socket(AF_UNIX, SOCK_STREAM, 0);
+	if (m_sock < 0)
 	{
 		Console.WriteLn(Color_Red, "PINE: Cannot open socket! Shutting down...");
 		Deinitialize();
 		return false;
 	}
 	server.sun_family = AF_UNIX;
-	StringUtil::Strlcpy(server.sun_path, s_socket_name, sizeof(server.sun_path));
+	StringUtil::Strlcpy(server.sun_path, m_socket_name, sizeof(server.sun_path));
 
 	// we unlink the socket so that when releasing this thread the socket gets
 	// freed even if we didn't close correctly the loop
-	unlink(s_socket_name.c_str());
-	if (bind(s_sock, (struct sockaddr*)&server, sizeof(struct sockaddr_un)))
+	unlink(m_socket_name.c_str());
+	if (bind(m_sock, (struct sockaddr*)&server, sizeof(struct sockaddr_un)))
 	{
 		Console.WriteLn(Color_Red, "PINE: Error while binding to socket! Shutting down...");
 		Deinitialize();
@@ -339,7 +405,7 @@ bool PINEServer::Initialize(int slot)
 	// maximum queue of 4096 commands before refusing, approximated to the
 	// nearest legal value. We do not use SOMAXCONN as windows have this idea
 	// that a "reasonable" value is 5, which is not.
-	if (listen(s_sock, 4096))
+	if (listen(m_sock, 4096))
 	{
 		Console.WriteLn(Color_Red, "PINE: Cannot listen for connections! Shutting down...");
 		Deinitialize();
@@ -348,23 +414,27 @@ bool PINEServer::Initialize(int slot)
 
 	// we allocate once buffers to not have to do mallocs for each IPC
 	// request, as malloc is expansive when we optimize for µs.
-	s_ret_buffer.resize(MAX_IPC_RETURN_SIZE);
-	s_ipc_buffer.resize(MAX_IPC_SIZE);
+	m_ret_buffer.resize(MAX_IPC_RETURN_SIZE);
+	m_ipc_buffer.resize(MAX_IPC_SIZE);
+	m_mem_ret_buffer.resize(MAX_IPC_RETURN_SIZE);
+
+	// reset recv time
+	g_pine_last_recv_seconds = time(NULL);
 
 	// we start the thread
-	s_thread = std::thread(&PINEServer::MainLoop);
+	m_thread = std::thread(&PINEServer::MainLoop);
 
 	return true;
 }
 
 bool PINEServer::IsInitialized()
 {
-	return !s_end.load(std::memory_order_acquire);
+	return !m_end.load(std::memory_order_acquire);
 }
 
 int PINEServer::GetSlot()
 {
-	return s_slot;
+	return m_slot;
 }
 
 std::vector<u8>& PINEServer::MakeOkIPC(std::vector<u8>& ret_buffer, uint32_t size = 5)
@@ -383,18 +453,13 @@ std::vector<u8>& PINEServer::MakeFailIPC(std::vector<u8>& ret_buffer, uint32_t s
 
 bool PINEServer::AcceptClient()
 {
-	s_msgsock = accept(s_sock, 0, 0);
-	if (s_msgsock >= 0)
+	m_msgsock = accept(m_sock, 0, 0);
+	if (m_msgsock >= 0)
 	{
 		// Gross C-style cast, but SOCKET is a handle on Windows.
-		Console.WriteLn("PINE: New client with FD %d connected.", (int)s_msgsock);
+		Console.WriteLn("PINE: New client with FD %d connected.", (int)m_msgsock);
 		return true;
 	}
-
-#ifdef __APPLE__
-	int nosigpipe = 1;
-	setsockopt(s_msgsock, SOL_SOCKET, SO_NOSIGPIPE, &nosigpipe, sizeof(nosigpipe));
-#endif
 
 	// everything else is non recoverable in our scope
 	// we also mark as recoverable socket errors where it would block a
@@ -402,51 +467,79 @@ bool PINEServer::AcceptClient()
 	// we ever have to implement a non blocking socket.
 #ifdef _WIN32
 	const int errno_w = WSAGetLastError();
-	if (!(errno_w == WSAECONNRESET || errno_w == WSAEINTR || errno_w == WSAEINPROGRESS || errno_w == WSAEMFILE || errno_w == WSAEWOULDBLOCK) && s_sock != INVALID_SOCKET)
+	if (!(errno_w == WSAECONNRESET || errno_w == WSAEINTR || errno_w == WSAEINPROGRESS || errno_w == WSAEMFILE || errno_w == WSAEWOULDBLOCK) && m_sock != INVALID_SOCKET)
 		Console.Error("PINE: accept() returned error %d", errno_w);
 #else
-	if (!(errno == ECONNABORTED || errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK) && s_sock >= 0)
+	if (!(errno == ECONNABORTED || errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK) && m_sock >= 0)
 		Console.Error("PINE: accept() returned error %d", errno);
 #endif
 
 	return false;
 }
 
+void PINEServer::IpcLoop()
+{
+	const std::span<u8> ipc_buffer_span(interop_state.interop_recv_buf);
+
+	const int len = interop_state.recv_len;
+	if (len > 0)
+	{
+		interop_state.recv_len = 0;
+		interop_state.send_len = 0;
+		PINEServer::IPCBuffer res;
+
+		// we remove 4 bytes to get the message size out of the IPC command
+		// size in ParseCommand.
+		// also, if we got a failed command, let's reset the state so we don't
+		// end up deadlocking by getting out of sync, eg when a client
+		// disconnects
+		res = ParseCommand(ipc_buffer_span.subspan(4), m_mem_ret_buffer, (u32)len - 4);
+
+		// move response into send buf
+		memcpy((u8*)interop_state.interop_send_buf, res.buffer.data(), res.size);
+		interop_state.send_len = res.size;
+	}
+}
+
 void PINEServer::MainLoop()
 {
-	Threading::SetNameOfCurrentThread("PINE Server");
-
-	while (!s_end.load(std::memory_order_acquire))
+	while (!m_end.load(std::memory_order_acquire))
 	{
 		if (!AcceptClient())
 			continue;
 
+		g_pine_last_connection = time(NULL);
 		ClientLoop();
+		g_pine_last_connection = 0;
 
 		Console.WriteLn("PINE: Client disconnected.");
-		safe_close_portable(s_msgsock);
+		safe_close_portable(m_msgsock);
 	}
 }
 
 void PINEServer::ClientLoop()
 {
-	while (!s_end.load(std::memory_order_acquire))
+	while (!m_end.load(std::memory_order_acquire))
 	{
 		// either int or ssize_t depending on the platform, so we have to
 		// use a bunch of auto
 		auto receive_length = 0;
 		auto end_length = 4;
-		const std::span<u8> ipc_buffer_span(s_ipc_buffer);
+		const std::span<u8> ipc_buffer_span(m_ipc_buffer);
 
 		// while we haven't received the entire packet, maybe due to
 		// socket datagram splittage, we continue to read
 		while (receive_length < end_length)
 		{
-			const auto tmp_length = read_portable(s_msgsock, &ipc_buffer_span[receive_length], MAX_IPC_SIZE - receive_length);
+			const auto tmp_length = read_portable(m_msgsock, &ipc_buffer_span[receive_length], MAX_IPC_SIZE - receive_length);
 
 			// we recreate the socket if an error happens
 			if (tmp_length <= 0)
+			{
+				DevCon.WriteLn("PINE: Cannot recieve request.. restarting socket...");
+				exit_process();
 				return;
+			}
 
 			receive_length += tmp_length;
 
@@ -471,41 +564,54 @@ void PINEServer::ClientLoop()
 		// disconnects
 		if (receive_length != 0)
 		{
-			res = ParseCommand(ipc_buffer_span.subspan(4), s_ret_buffer, (u32)end_length - 4);
+			g_pine_last_recv_seconds = time(NULL);
+			res = ParseCommand(ipc_buffer_span.subspan(4), m_ret_buffer, (u32)end_length - 4);
 
 			// if we cannot send back our answer restart the socket
-			if (write_portable(s_msgsock, res.buffer.data(), res.size) < 0)
+			if (write_portable(m_msgsock, res.buffer.data(), res.size) < 0)
+			{
+				DevCon.WriteLn("PINE: Cannot send response.. restarting socket...");
+				exit_process();
 				return;
+			}
+		}
+
+		if (reset)
+		{
+			reset = 0;
+			return;
 		}
 	}
 }
 
 void PINEServer::Deinitialize()
 {
-	s_end.store(true, std::memory_order_release);
+	m_end.store(true, std::memory_order_release);
 
 #ifndef _WIN32
-	if (!s_socket_name.empty())
+	if (!m_socket_name.empty())
 	{
-		unlink(s_socket_name.c_str());
-		s_socket_name = {};
+		unlink(m_socket_name.c_str());
+		m_socket_name = {};
 	}
 #endif
 
 	// shutdown() is needed, otherwise accept() will still block.
 #ifdef _WIN32
-	if (s_sock != INVALID_SOCKET)
-		shutdown(s_sock, SD_BOTH);
+	//if (m_sock != INVALID_SOCKET)
+	//	shutdown(m_sock, SD_BOTH);
+	WSACleanup();
 #else
-	if (s_sock >= 0)
-		shutdown(s_sock, SHUT_RDWR);
+	//if (m_sock >= 0)
+	//	shutdown(m_sock, SHUT_RDWR);
+	unlink(m_socket_name.c_str());
 #endif
 
-	safe_close_portable(s_sock);
-	safe_close_portable(s_msgsock);
+	safe_close_portable(m_sock);
+	safe_close_portable(m_msgsock);
 
-	if (s_thread.joinable())
-		s_thread.join();
+	if (m_thread.joinable())
+		m_thread.join();
 }
 
 PINEServer::IPCBuffer PINEServer::ParseCommand(std::span<u8> buf, std::vector<u8>& ret_buffer, u32 buf_size)
@@ -529,7 +635,8 @@ PINEServer::IPCBuffer PINEServer::ParseCommand(std::span<u8> buf, std::vector<u8
 		//        |  return value (VLE)
 		//        |  |
 		// reply: XX ZZ ZZ ZZ ZZ
-		switch ((IPCCommand)buf[buf_cnt - 1])
+		IPCCommand cmd = (IPCCommand)buf[buf_cnt - 1];
+		switch (cmd)
 		{
 			case MsgRead8:
 			{
@@ -646,11 +753,7 @@ PINEServer::IPCBuffer PINEServer::ParseCommand(std::span<u8> buf, std::vector<u8
 					goto error;
 				if (!SafetyChecks(buf_cnt, 1, ret_cnt, 0, buf_size)) [[unlikely]]
 					goto error;
-				Host::RunOnCPUThread([slot = FromSpan<u8>(buf, buf_cnt)] {
-					VMManager::SaveStateToSlot(slot, true, [slot](const std::string& error) {
-						SaveState_ReportSaveErrorOSD(error, slot);
-					});
-				});
+				Host::RunOnCPUThread([slot = FromSpan<u8>(buf, buf_cnt)] { VMManager::SaveStateToSlot(slot, true, nullptr); });
 				buf_cnt += 1;
 				break;
 			}
@@ -660,11 +763,7 @@ PINEServer::IPCBuffer PINEServer::ParseCommand(std::span<u8> buf, std::vector<u8
 					goto error;
 				if (!SafetyChecks(buf_cnt, 1, ret_cnt, 0, buf_size)) [[unlikely]]
 					goto error;
-				Host::RunOnCPUThread([slot = FromSpan<u8>(buf, buf_cnt)] {
-					Error state_error;
-					if (!VMManager::LoadStateFromSlot(slot, false, &state_error))
-						SaveState_ReportLoadErrorOSD(state_error.GetDescription(), slot, false);
-				});
+				Host::RunOnCPUThread([slot = FromSpan<u8>(buf, buf_cnt)] { VMManager::LoadStateFromSlot(slot); });
 				buf_cnt += 1;
 				break;
 			}
@@ -727,25 +826,293 @@ PINEServer::IPCBuffer PINEServer::ParseCommand(std::span<u8> buf, std::vector<u8
 			}
 			case MsgStatus:
 			{
-				if (!SafetyChecks(buf_cnt, 0, ret_cnt, 4, buf_size)) [[unlikely]]
+				if (!SafetyChecks(buf_cnt, 0, ret_cnt, 8, buf_size))
 					goto error;
 				EmuStatus status;
 
-				switch (VMManager::GetState())
+				if (VMManager::HasValidVM())
 				{
-					case VMState::Running:
-						status = EmuStatus::Running;
-						break;
-					case VMState::Paused:
-						status = EmuStatus::Paused;
-						break;
-					default:
-						status = EmuStatus::Shutdown;
-						break;
+					if (g_FrameStep.IsPaused())
+						status = Paused;
+					else
+					{
+						switch (VMManager::GetState())
+						{
+							case VMState::Running:
+								status = EmuStatus::Running;
+								break;
+							case VMState::Paused:
+								status = EmuStatus::Paused;
+								break;
+							default:
+								status = EmuStatus::Shutdown;
+								break;
+						}
+					}
+				}
+				else
+				{
+					status = Shutdown;
 				}
 
 				ToResultVector(ret_buffer, status, ret_cnt);
-				ret_cnt += 4;
+				ToResultVector(ret_buffer, g_FrameCount, ret_cnt + 4);
+				ToResultVector(ret_buffer, g_eeRecExecuting, ret_cnt + 8);
+				ret_cnt += 9;
+				break;
+			}
+
+			case MsgReadN:
+			{
+				if (!VMManager::HasValidVM())
+					goto error;
+				if (!SafetyChecks(buf_cnt, 6, ret_cnt, 1, buf_size))
+					goto error;
+
+				const u32 a = FromSpan<u32>(buf, buf_cnt);
+				const u16 l = FromSpan<u16>(buf, buf_cnt + 4);
+				if (!SafetyChecks(buf_cnt, 6, ret_cnt, l, buf_size))
+					goto error;
+				if (!vtlb_memSafeReadBytes(a, reinterpret_cast<mem8_t*>(&ret_buffer[ret_cnt]), (u32)l))
+					goto error;
+				//if (!vtlb_ramRead(a, reinterpret_cast<mem8_t*>(&ret_buffer[ret_cnt]), (u32)l))
+				//	goto error;
+				ret_cnt += l;
+				buf_cnt += 6;
+				break;
+			}
+			case MsgWriteN:
+			{
+				if (!VMManager::HasValidVM())
+					goto error;
+				if (!SafetyChecks(buf_cnt, 6, ret_cnt, 1, buf_size))
+					goto error;
+
+				const u32 a = FromSpan<u32>(buf, buf_cnt);
+				const u32 c = FromSpan<u16>(buf, buf_cnt + 4);
+				if (!SafetyChecks(buf_cnt, c + 6, ret_cnt, 0, buf_size))
+					goto error;
+				buf_cnt += 6;
+				vtlb_memSafeWriteBytes(a, reinterpret_cast<mem8_t*>(&buf[buf_cnt]), (u32)c);
+				//if (!vtlb_ramWrite(a, reinterpret_cast<mem8_t*>(&buf[buf_cnt]), (u32)c))
+				//	goto error;
+				buf_cnt += c;
+				u8 res = 1;
+				ToResultVector(ret_buffer, res, ret_cnt);
+				ret_cnt += 1;
+				break;
+			}
+			case MsgFrameAdvance:
+			{
+				if (!VMManager::HasValidVM())
+					goto error;
+				if (!SafetyChecks(buf_cnt, 0, ret_cnt, 1, buf_size))
+					goto error;
+				g_FrameStep.FrameAdvance();
+				u8 res = 1;
+				ToResultVector(ret_buffer, res, ret_cnt);
+				ret_cnt += 1;
+				break;
+			}
+			case MsgSetDynamicSetting:
+			{
+				if (!SafetyChecks(buf_cnt, 1, ret_cnt, 1, buf_size))
+					goto error;
+
+				// get args
+				const enum DynamicSettingId settingId = (enum DynamicSettingId)FromSpan<u8>(buf, buf_cnt);
+
+				switch (settingId)
+				{
+					case DynamicSettingFrameSleepWait:
+					{
+						const u8 value = FromSpan<u8>(buf, buf_cnt + 1);
+						g_FrameStep.SetSleepWait(value != 0);
+						buf_cnt += 1;
+						break;
+					}
+					case DynamicSettingDisableRendering:
+					{
+						const u8 value = FromSpan<u8>(buf, buf_cnt + 1);
+						g_disable_rendering = value != 0;
+						buf_cnt += 1;
+						break;
+					}
+					case DynamicSettingReloadConfig:
+					{
+						LayeredSettingsInterface* lsi = (LayeredSettingsInterface*)Host::GetSettingsInterface();
+						INISettingsInterface* si = (INISettingsInterface*)lsi->GetLayer(LayeredSettingsInterface::LAYER_BASE);
+						if (si)
+						{
+							si->Clear();
+							si->Load();
+						}
+						VMManager::ApplySettings();
+						break;
+					}
+					case DynamicSettingResetSocket:
+					{
+						Console.WriteLn("PINE: Recv DynamicSettingResetSocket.. restarting socket...");
+						reset = 1;
+						break;
+					}
+					case DynamicSettingSetVolume:
+					{
+						const u8 value = FromSpan<u8>(buf, buf_cnt + 1);
+						EmuConfig.SPU2.FastForwardVolume = value;
+						EmuConfig.SPU2.StandardVolume = value;
+						SPU2::SetOutputVolume(value);
+						buf_cnt += 1;
+						//Console.WriteLn("PINE: Recv DynamicSettingSetVolume.. %d", value);
+						break;
+					}
+					default:
+					{
+						break;
+					}
+				}
+
+				buf_cnt += 1;
+
+				u8 res = 1;
+				ToResultVector(ret_buffer, res, ret_cnt);
+				ret_cnt += 1;
+				break;
+			}
+			case MsgResume:
+			{
+				if (!VMManager::HasValidVM())
+					goto error;
+				if (!SafetyChecks(buf_cnt, 0, ret_cnt, 1, buf_size))
+					goto error;
+				g_FrameStep.Resume();
+				u8 res = 1;
+				ToResultVector(ret_buffer, res, ret_cnt);
+				ret_cnt += 1;
+				break;
+			}
+			case MsgPause:
+			{
+				if (!VMManager::HasValidVM())
+					goto error;
+				if (!SafetyChecks(buf_cnt, 0, ret_cnt, 1, buf_size))
+					goto error;
+				g_FrameStep.Pause();
+				u8 res = 1;
+				ToResultVector(ret_buffer, res, ret_cnt);
+				ret_cnt += 1;
+				break;
+			}
+			case MsgRestart:
+			{
+				if (!VMManager::HasValidVM())
+					goto error;
+				//g_Conf->EmuOptions.UseBOOT2Injection = true;
+				VMManager::Reset();
+				//CoreThread.ResetQuick();
+				//CoreThread.Resume();
+				g_FrameStep.Resume();
+
+				u8 res = 1;
+				ToResultVector(ret_buffer, res, ret_cnt);
+				ret_cnt += 1;
+				break;
+			}
+			case MsgStop:
+			{
+				if (!SafetyChecks(buf_cnt, 0, ret_cnt, 1, buf_size))
+					goto error;
+				//g_Conf->EmuOptions.UseBOOT2Injection = true;
+				//CoreThread.ResetQuick();
+
+
+				VMManager::Shutdown(false);
+
+				//if (GSFrame* gsframe = wxGetApp().GetGsFramePtr())
+				//	gsframe->Show(false);
+
+				//CoreThread.Resume();
+				g_FrameStep.Resume();
+
+				u8 res = 1;
+				ToResultVector(ret_buffer, res, ret_cnt);
+				ret_cnt += 1;
+				break;
+			}
+			case MsgGetFrameBuffer:
+			{
+				int bitCount = 512 * 448 * 4;
+				if (!VMManager::HasValidVM())
+					goto error;
+				if (!SafetyChecks(buf_cnt, 0, ret_cnt, bitCount, buf_size))
+					goto error;
+
+				memcpy(&ret_buffer[ret_cnt], FRAME_BUFFER_COPY, bitCount);
+				ret_cnt += bitCount;
+				break;
+			}
+			case MsgSetPad:
+			{
+				if (!VMManager::HasValidVM())
+					goto error;
+				if (!SafetyChecks(buf_cnt, 36, ret_cnt, 1, buf_size))
+					goto error;
+
+				// get args
+				const u16 port = FromSpan<u16>(buf, buf_cnt);
+				const u16 slot = FromSpan<u16>(buf, buf_cnt + 2);
+				buf_cnt += 4;
+
+				// set pad
+				SetPad(port, slot, (u8*)&buf[buf_cnt]);
+
+				buf_cnt += 32;
+				u8 res = 1;
+				ToResultVector(ret_buffer, res, ret_cnt);
+				ret_cnt += 1;
+				break;
+			}
+			case MsgGetVmPtr:
+			{
+				//if (!VMManager::HasValidVM())
+				//	goto error;
+				if (!SafetyChecks(buf_cnt, 0, ret_cnt, 8 * 5, buf_size))
+					goto error;
+
+				uptr res = 0;
+				if (VMManager::HasValidVM())
+				{
+					res = vtlb_getTblPtr(0x100000);
+					if (res > 0)
+						res -= 0x100000;
+				}
+
+				ToResultVector(ret_buffer, res, ret_cnt);
+				ret_cnt += 8;
+
+				res = (uptr)&g_FrameCount;
+				ToResultVector(ret_buffer, res, ret_cnt);
+				ret_cnt += 8;
+
+				res = (uptr)&g_eeRecExecuting;
+				ToResultVector(ret_buffer, res, ret_cnt);
+				ret_cnt += 8;
+
+				res = (uptr)&interop_state;
+				ToResultVector(ret_buffer, res, ret_cnt);
+				ret_cnt += 8;
+
+				res = (uptr)&FRAME_BUFFER_COPY;
+				ToResultVector(ret_buffer, res, ret_cnt);
+				ret_cnt += 8;
+
+				res = (uptr)&g_stereo_buf_back;
+				ToResultVector(ret_buffer, res, ret_cnt);
+				ret_cnt += 8;
+
+				res = (uptr)&g_stereo_idx_back;
+				ToResultVector(ret_buffer, res, ret_cnt);
+				ret_cnt += 8;
 				break;
 			}
 			default:
@@ -756,4 +1123,55 @@ PINEServer::IPCBuffer PINEServer::ParseCommand(std::span<u8> buf, std::vector<u8
 		}
 	}
 	return IPCBuffer{(int)ret_cnt, MakeOkIPC(ret_buffer, ret_cnt)};
+}
+
+
+void PINEServer::WriteStereoFrame(const s32 left, const s32 right)
+{
+	const s16 l16 = std::clamp(left, -0x8000, 0x7fff);
+	const s16 r16 = std::clamp(right, -0x8000, 0x7fff);
+
+	// new frame
+	if (g_stereo_frame != g_FrameCount)
+	{
+		g_stereo_idx_back = g_stereo_idx;
+		memcpy(g_stereo_buf_back, g_stereo_buf, sizeof(g_stereo_buf_back));
+
+		g_stereo_idx = 0;
+		g_stereo_frame = g_FrameCount;
+	}
+
+	// ran out of room
+	if ((g_stereo_idx + 2) * 2 > sizeof(g_stereo_buf))
+	{
+		return;
+	}
+
+	g_stereo_buf[g_stereo_idx++] = l16;
+	g_stereo_buf[g_stereo_idx++] = r16;
+}
+
+void SetPad(int port, int slot, u8* buf)
+{
+	PadBase* pad = Pad::GetPad(port);
+	pad->SetRawAnalogs(std::tuple<u8, u8>(buf[6], buf[7]), std::tuple<u8, u8>(buf[4], buf[5]));
+
+	pad->Set(PadDualshock2::Inputs::PAD_RIGHT, buf[8]);
+	pad->Set(PadDualshock2::Inputs::PAD_LEFT, buf[9]);
+	pad->Set(PadDualshock2::Inputs::PAD_UP, buf[10]);
+	pad->Set(PadDualshock2::Inputs::PAD_DOWN, buf[11]);
+	pad->Set(PadDualshock2::Inputs::PAD_START, buf[20]);
+	pad->Set(PadDualshock2::Inputs::PAD_SELECT, buf[21]);
+	pad->Set(PadDualshock2::Inputs::PAD_R3, buf[23]);
+	pad->Set(PadDualshock2::Inputs::PAD_L3, buf[22]);
+
+	pad->Set(PadDualshock2::Inputs::PAD_SQUARE, buf[15]);
+	pad->Set(PadDualshock2::Inputs::PAD_CROSS, buf[14]);
+	pad->Set(PadDualshock2::Inputs::PAD_CIRCLE, buf[13]);
+	pad->Set(PadDualshock2::Inputs::PAD_TRIANGLE, buf[12]);
+
+	pad->Set(PadDualshock2::Inputs::PAD_R1, buf[17]);
+	pad->Set(PadDualshock2::Inputs::PAD_L1, buf[16]);
+	pad->Set(PadDualshock2::Inputs::PAD_R2, buf[19]);
+	pad->Set(PadDualshock2::Inputs::PAD_L2, buf[18]);
 }

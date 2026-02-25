@@ -473,6 +473,9 @@ void mVUtestCycles(microVU& mVU, microFlagCycles& mFC)
 			case 3: // 300%
 				mVUcycles /= 3.0f;
 				break;
+			case 4: // MAX%
+				mVUcycles = 0;
+				break;
 			default:
 				break;
 		}

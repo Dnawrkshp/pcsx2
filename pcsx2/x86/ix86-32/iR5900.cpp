@@ -15,6 +15,7 @@
 #include "x86/BaseblockEx.h"
 #include "x86/iR5900.h"
 #include "x86/iR5900Analysis.h"
+#include "PINE.h"
 
 #include "common/AlignedMalloc.h"
 #include "common/FastJmp.h"
@@ -57,6 +58,7 @@ u32 s_nBlockCycles = 0; // cycles of current block recompiling
 bool s_nBlockInterlocked = false; // Block is VU0 interlocked
 u32 pc; // recompiler pc
 int g_branch; // set for branch
+bool g_eeRecExecuting = false;
 
 alignas(16) GPR_reg64 g_cpuConstRegs[32] = {};
 u32 g_cpuHasConstReg = 0, g_cpuFlushedConstReg = 0;
@@ -575,6 +577,7 @@ static void recResetRaw()
 		extraRam = !extraRam;
 	}
 
+	g_eeRecExecuting = true;
 	EE::Profiler.Reset();
 
 	xSetPtr(SysMemory::GetEERec());
@@ -596,6 +599,7 @@ static void recResetRaw()
 
 	g_branch = 0;
 	g_resetEeScalingStats = true;
+	g_eeRecExecuting = false;
 
 	memset(manual_page, 0, sizeof(manual_page));
 	memset(manual_counter, 0, sizeof(manual_counter));
@@ -1263,7 +1267,7 @@ static u32 scaleblockcycles_calculation()
 	const s8 cyclerate = EmuConfig.Speedhacks.EECycleRate;
 	u32 scale_cycles = 0;
 
-	if (cyclerate == 0 || lowcycles || cyclerate < -99 || cyclerate > 3)
+	if (cyclerate == 0 || lowcycles || cyclerate < -99 || cyclerate > 4)
 		scale_cycles = DEFAULT_SCALED_BLOCKS();
 
 	else if (cyclerate > 1)
@@ -1278,6 +1282,9 @@ static u32 scaleblockcycles_calculation()
 
 	else
 		scale_cycles = ((5 + (-2 * (cyclerate + 1))) * s_nBlockCycles) >> 5;
+
+	if (cyclerate == 4)
+		scale_cycles = (s_nBlockCycles <= 30) ? 2 : 1;
 
 	// Ensure block cycle count is never less than 1.
 	return (scale_cycles < 1) ? 1 : scale_cycles;
@@ -2178,6 +2185,7 @@ static void recRecompile(const u32 startpc)
 {
 	u32 i = 0;
 	u32 willbranch3 = 0;
+	u32 ipcLastCycle = 0;
 
 	pxAssert(startpc);
 
@@ -2308,6 +2316,12 @@ static void recRecompile(const u32 startpc)
 
 	while (1)
 	{
+		if (ipcLastCycle != cpuRegs.cycle)
+		{
+			PINEServer::IpcLoop();
+			ipcLastCycle = cpuRegs.cycle;
+		}
+
 		BASEBLOCK* pblock = PC_GETBLOCK(i);
 
 		// stop before breakpoints

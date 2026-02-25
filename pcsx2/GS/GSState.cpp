@@ -19,6 +19,8 @@
 #include <iomanip>
 #include <bit>
 
+extern int g_disable_rendering;
+
 u64 GSState::s_n = 0;
 u64 GSState::s_last_transfer_draw_n = 0;
 u64 GSState::s_transfer_n = 0;
@@ -2146,7 +2148,7 @@ void GSState::FlushPrim()
 				DumpTransferImages();
 		}
 
-		if (!skip_draw)
+		if (!skip_draw && !g_disable_rendering)
 			Draw();
 
 		g_perfmon.Put(GSPerfMon::Draw, 1);

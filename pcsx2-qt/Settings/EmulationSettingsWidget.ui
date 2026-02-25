@@ -102,6 +102,11 @@
           <string>300% (Overclock)</string>
          </property>
         </item>
+        <item>
+         <property name="text">
+          <string>MAX% (Overclock)</string>
+         </property>
+        </item>
        </widget>
       </item>
       <item row="1" column="1">

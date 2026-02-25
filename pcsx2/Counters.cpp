@@ -20,7 +20,10 @@
 #include "Recording/InputRecording.h"
 #include "VMManager.h"
 #include "VUmicro.h"
+#include "Recording/InputRecordingControls.h"
+#include "pcsx2/FrameStep.h"
 
+using namespace Threading;
 static const uint EECNT_FUTURE_TARGET = 0x10000000;
 
 uint g_FrameCount = 0;
@@ -565,7 +568,7 @@ static __fi void VSyncEnd(u32 sCycle)
 {
 	EECNT_LOG("    ================  EE COUNTER VSYNC END (frame: %d)  ================", g_FrameCount);
 
-	g_FrameCount++;
+	//g_FrameCount++;
 	if (!GSSMODE1reg.SINT)
 	{
 		hwIntcIrq(INTC_VBLANK_E); // HW Irq
@@ -608,6 +611,10 @@ __fi void rcntUpdate_vSync()
 	}
 	else // VSYNC Start
 	{
+		g_FrameStep.CheckPauseStatus();
+		g_FrameCount++;
+		g_FrameStep.HandlePausing();
+
 		vsyncCounter.startCycle += vSyncInfo.Render;
 		vsyncCounter.deltaCycles = vSyncInfo.GSBlank;
 
