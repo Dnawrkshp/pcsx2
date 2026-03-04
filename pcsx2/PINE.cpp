@@ -216,6 +216,7 @@ namespace PINEServer
 		DynamicSettingReloadConfig = 2, /**< Reloads PCSX2 config file */
 		DynamicSettingResetSocket = 3, /**< Resets the PINE socket */
 		DynamicSettingSetVolume = 4, /**< Sets the output volume */
+		DynamicSettingSetTurbo = 5, /**< Enables/disables turbo */
 		DynamicSettingIdUnimplemented = 0xFF /**< Unimplemented DynamicSettingId. */
 	};
 
@@ -829,6 +830,7 @@ PINEServer::IPCBuffer PINEServer::ParseCommand(std::span<u8> buf, std::vector<u8
 				if (!SafetyChecks(buf_cnt, 0, ret_cnt, 8, buf_size))
 					goto error;
 				EmuStatus status;
+				const bool vm_turbo = VMManager::GetLimiterMode() != LimiterModeType::Nominal;
 
 				if (VMManager::HasValidVM())
 				{
@@ -858,7 +860,8 @@ PINEServer::IPCBuffer PINEServer::ParseCommand(std::span<u8> buf, std::vector<u8
 				ToResultVector(ret_buffer, status, ret_cnt);
 				ToResultVector(ret_buffer, g_FrameCount, ret_cnt + 4);
 				ToResultVector(ret_buffer, g_eeRecExecuting, ret_cnt + 8);
-				ret_cnt += 9;
+				ToResultVector(ret_buffer, vm_turbo, ret_cnt + 9);
+				ret_cnt += 10;
 				break;
 			}
 
@@ -947,14 +950,16 @@ PINEServer::IPCBuffer PINEServer::ParseCommand(std::span<u8> buf, std::vector<u8
 					}
 					case DynamicSettingReloadConfig:
 					{
-						LayeredSettingsInterface* lsi = (LayeredSettingsInterface*)Host::GetSettingsInterface();
-						INISettingsInterface* si = (INISettingsInterface*)lsi->GetLayer(LayeredSettingsInterface::LAYER_BASE);
-						if (si)
-						{
-							si->Clear();
-							si->Load();
-						}
-						VMManager::ApplySettings();
+						Host::RunOnCPUThread([] {
+							LayeredSettingsInterface* lsi = (LayeredSettingsInterface*)Host::GetSettingsInterface();
+							INISettingsInterface* si = (INISettingsInterface*)lsi->GetLayer(LayeredSettingsInterface::LAYER_BASE);
+							if (si)
+							{
+								si->Clear();
+								si->Load();
+							}
+							VMManager::ApplySettings();
+						});
 						break;
 					}
 					case DynamicSettingResetSocket:
@@ -971,6 +976,15 @@ PINEServer::IPCBuffer PINEServer::ParseCommand(std::span<u8> buf, std::vector<u8
 						SPU2::SetOutputVolume(value);
 						buf_cnt += 1;
 						//Console.WriteLn("PINE: Recv DynamicSettingSetVolume.. %d", value);
+						break;
+					}
+					case DynamicSettingSetTurbo:
+					{
+						const u8 value = FromSpan<u8>(buf, buf_cnt + 1);
+						Host::RunOnCPUThread([value] {
+							VMManager::SetLimiterMode(value == 0 ? LimiterModeType::Nominal : LimiterModeType::Turbo);
+						});
+						buf_cnt += 1;
 						break;
 					}
 					default:
