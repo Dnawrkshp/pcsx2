@@ -2318,7 +2318,7 @@ static void recRecompile(const u32 startpc)
 	{
 		if (ipcLastCycle != cpuRegs.cycle)
 		{
-			PINEServer::IpcLoop();
+			//PINEServer::IpcLoop();
 			ipcLastCycle = cpuRegs.cycle;
 		}
 
