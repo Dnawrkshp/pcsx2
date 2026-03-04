@@ -893,9 +893,16 @@ PINEServer::IPCBuffer PINEServer::ParseCommand(std::span<u8> buf, std::vector<u8
 				if (!SafetyChecks(buf_cnt, c + 6, ret_cnt, 0, buf_size))
 					goto error;
 				buf_cnt += 6;
-				vtlb_memSafeWriteBytes(a, reinterpret_cast<mem8_t*>(&buf[buf_cnt]), (u32)c);
-				//if (!vtlb_ramWrite(a, reinterpret_cast<mem8_t*>(&buf[buf_cnt]), (u32)c))
-				//	goto error;
+
+				// Copy the data we need before passing to CPU thread
+				// This ensures the data remains valid when the CPU thread executes
+				std::vector<u8> data_copy(buf.begin() + buf_cnt, buf.begin() + buf_cnt + c);
+				
+				Host::RunOnCPUThread([a, c, data = std::move(data_copy)] {
+					if (vtlb_memSafeCmpBytes(a, reinterpret_cast<const mem8_t*>(data.data()), (u32)c) != 0)
+						vtlb_memSafeWriteBytes(a, reinterpret_cast<const mem8_t*>(data.data()), (u32)c);
+				});
+
 				buf_cnt += c;
 				u8 res = 1;
 				ToResultVector(ret_buffer, res, ret_cnt);
