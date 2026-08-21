@@ -1207,7 +1207,7 @@ void MainWindow::switchToEmulationView()
 	if (s_vm_paused && !m_was_paused_on_surface_loss)
 		g_emu_thread->setVMPaused(false);
 
-	if (m_display_surface)
+	if (m_display_surface && !Host::InNoGUIMode())
 		m_display_surface->setFocus();
 }
 
@@ -2157,7 +2157,8 @@ void MainWindow::onVMResumed()
 	if (m_display_surface)
 	{
 		updateDisplayWidgetCursor();
-		m_display_surface->setFocus();
+		if (!Host::InNoGUIMode())
+			m_display_surface->setFocus();
 	}
 }
 
@@ -2495,7 +2496,8 @@ std::optional<WindowInfo> MainWindow::acquireRenderWindow(bool recreate_window, 
 		}
 
 		updateDisplayWidgetCursor();
-		m_display_surface->setFocus();
+		if (!Host::InNoGUIMode())
+			m_display_surface->setFocus();
 		updateWindowState();
 
 		QCoreApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
@@ -2532,7 +2534,8 @@ std::optional<WindowInfo> MainWindow::acquireRenderWindow(bool recreate_window, 
 	updateWindowState();
 
 	updateDisplayWidgetCursor();
-	m_display_surface->setFocus();
+	if (!Host::InNoGUIMode())
+		m_display_surface->setFocus();
 	return wi;
 }
 
