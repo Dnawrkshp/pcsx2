@@ -94,6 +94,15 @@ void GSRendererHW::UpdateSettings(const Pcsx2Config::GSOptions& old_config)
 
 void GSRendererHW::VSync(u32 field, bool registers_written, bool idle_frame)
 {
+	if (!IsRenderingEnabled())
+	{
+		m_draw_transfers.clear();
+		m_skip = 0;
+		m_skip_offset = 0;
+		GSRenderer::VSync(field, registers_written, idle_frame);
+		return;
+	}
+
 	if (GSConfig.LoadTextureReplacements)
 		GSTextureReplacements::ProcessAsyncLoadedTextures();
 

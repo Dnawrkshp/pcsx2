@@ -52,11 +52,24 @@
 
 #include "fmt/format.h"
 
+#include <atomic>
 #include <fstream>
 
 Pcsx2Config::GSOptions GSConfig;
 
 static GSRendererType GSCurrentRenderer;
+static std::atomic_bool s_rendering_enabled_requested{true};
+
+void GSRequestRenderingEnabled(bool enabled)
+{
+	s_rendering_enabled_requested.store(enabled, std::memory_order_release);
+}
+
+static void ApplyRequestedRenderingState()
+{
+	if (g_gs_renderer)
+		g_gs_renderer->SetRenderingEnabled(s_rendering_enabled_requested.load(std::memory_order_acquire));
+}
 
 GSRendererType GSGetCurrentRenderer()
 {
@@ -220,6 +233,7 @@ static bool OpenGSRenderer(GSRendererType renderer, u8* basemem)
 
 	g_gs_renderer->SetRegsMem(basemem);
 	g_gs_renderer->ResetPCRTC();
+	g_gs_renderer->SetRenderingEnabled(s_rendering_enabled_requested.load(std::memory_order_acquire));
 	g_gs_renderer->UpdateRenderFixes();
 	g_perfmon.Reset();
 	return true;
@@ -377,6 +391,7 @@ void GSclose()
 
 void GSreset(bool hardware_reset)
 {
+	ApplyRequestedRenderingState();
 	g_gs_renderer->Reset(hardware_reset);
 
 	// Restart video capture if it's been started.
@@ -393,16 +408,19 @@ void GSreset(bool hardware_reset)
 
 void GSgifSoftReset(u32 mask)
 {
+	ApplyRequestedRenderingState();
 	g_gs_renderer->SoftReset(mask);
 }
 
 void GSwriteCSR(u32 csr)
 {
+	ApplyRequestedRenderingState();
 	g_gs_renderer->WriteCSR(csr);
 }
 
 void GSInitAndReadFIFO(u8* mem, u32 size)
 {
+	ApplyRequestedRenderingState();
 	GL_PERF("Init and read FIFO %u qwc", size);
 	g_gs_renderer->InitReadFIFO(mem, size);
 	g_gs_renderer->ReadFIFO(mem, size);
@@ -415,26 +433,32 @@ void GSReadLocalMemoryUnsync(u8* mem, u32 qwc, u64 BITBLITBUF, u64 TRXPOS, u64 T
 
 void GSgifTransfer(const u8* mem, u32 size)
 {
+	ApplyRequestedRenderingState();
 	g_gs_renderer->Transfer<3>(mem, size);
 }
 
 void GSgifTransfer1(u8* mem, u32 addr)
 {
+	ApplyRequestedRenderingState();
 	g_gs_renderer->Transfer<0>(const_cast<u8*>(mem) + addr, (0x4000 - addr) / 16);
 }
 
 void GSgifTransfer2(u8* mem, u32 size)
 {
+	ApplyRequestedRenderingState();
 	g_gs_renderer->Transfer<1>(const_cast<u8*>(mem), size);
 }
 
 void GSgifTransfer3(u8* mem, u32 size)
 {
+	ApplyRequestedRenderingState();
 	g_gs_renderer->Transfer<2>(const_cast<u8*>(mem), size);
 }
 
 void GSvsync(u32 field, bool registers_written)
 {
+	ApplyRequestedRenderingState();
+
 	// Update this here because we need to check if the pending draw affects the current frame, so our regs need to be updated.
 	g_gs_renderer->PCRTCDisplays.SetVideoMode(g_gs_renderer->GetVideoMode());
 	g_gs_renderer->PCRTCDisplays.EnableDisplays(g_gs_renderer->m_regs->PMODE, g_gs_renderer->m_regs->SMODE2, g_gs_renderer->isReallyInterlaced());
@@ -504,6 +528,7 @@ void GSEndCapture()
 
 void GSPresentCurrentFrame()
 {
+	ApplyRequestedRenderingState();
 	g_gs_renderer->PresentCurrentFrame();
 }
 

@@ -53,15 +53,13 @@ static Common::Timer::Value s_last_gpu_reset_time;
 // Screen alignment
 static GSDisplayAlignment s_display_alignment = GSDisplayAlignment::Center;
 
-extern int g_disable_rendering;
 u8 FRAME_BUFFER_COPY[512 * 448 * 4];
-GSTexture* FRAME_BUFFER_RT_TEXTURE;
 
 GSRenderer::GSRenderer()
 	: m_shader_time_start(Common::Timer::GetCurrentValue())
+	, m_frame_buffer_rt_texture(g_gs_device->CreateRenderTarget(512, 448, GSTexture::Format::Color, false))
 {
 	s_last_draw_rect = GSVector4::zero();
-	FRAME_BUFFER_RT_TEXTURE = g_gs_device->CreateRenderTarget(512, 448, GSTexture::Format::Color, false);
 }
 
 GSRenderer::~GSRenderer() = default;
@@ -576,6 +574,24 @@ void GSRenderer::EndPresentFrame()
 
 void GSRenderer::VSync(u32 field, bool registers_written, bool idle_frame)
 {
+	if (!IsRenderingEnabled())
+	{
+		const bool fb_sprite_frame = (g_perfmon.GetDisplayFramebufferSpriteBlits() > 0);
+		m_last_draw_n = s_n;
+		m_last_transfer_n = s_transfer_n;
+		m_skipped_duplicate_frames = 0;
+
+		g_perfmon.EndFrame(idle_frame);
+		if ((g_perfmon.GetFrame() & 0x1f) == 0)
+			g_perfmon.Update();
+
+		if (m_scanmask_used)
+			m_scanmask_used--;
+
+		PerformanceMetrics::Update(registers_written, fb_sprite_frame, false);
+		return;
+	}
+
 	if (GSConfig.ShouldDump(s_n, g_perfmon.GetFrame()))
 	{
 		if (GSConfig.SaveInfo)
@@ -837,7 +853,7 @@ void GSRenderer::VSync(u32 field, bool registers_written, bool idle_frame)
 			}
 		}
 	}
-	else if (!g_disable_rendering)
+	else
 	{
 		if (GSTexture* current = g_gs_device->GetCurrent())
 		{
@@ -845,14 +861,15 @@ void GSRenderer::VSync(u32 field, bool registers_written, bool idle_frame)
 			GSVector4 src_uv = GSVector4(src_rect) / GSVector4(current->GetSize()).xyxy();
 
 			// We're not expecting screenshots to be fast, so just allocate a download texture on demand.
-			if (FRAME_BUFFER_RT_TEXTURE)
+			if (m_frame_buffer_rt_texture)
 			{
 				std::unique_ptr<GSDownloadTexture> dl(g_gs_device->CreateDownloadTexture(512, 448, GSTexture::Format::Color));
 				if (dl)
 				{
 					const GSVector4i rc(0, 0, 512, 448);
-					g_gs_device->StretchRect(current, src_uv, FRAME_BUFFER_RT_TEXTURE, GSVector4(rc), ShaderConvert::TRANSPARENCY_FILTER);
-					dl->CopyFromTexture(rc, FRAME_BUFFER_RT_TEXTURE, rc, 0);
+					g_gs_device->StretchRect(current, src_uv, m_frame_buffer_rt_texture.get(), GSVector4(rc),
+						ShaderConvert::TRANSPARENCY_FILTER);
+					dl->CopyFromTexture(rc, m_frame_buffer_rt_texture.get(), rc, 0);
 					dl->Flush();
 
 					if (dl->Map(rc))
@@ -988,6 +1005,9 @@ void GSRenderer::StopGSDump()
 
 void GSRenderer::PresentCurrentFrame()
 {
+	if (!IsRenderingEnabled())
+		return;
+
 	if (BeginPresentFrame(false))
 	{
 		GSTexture* current = g_gs_device->GetCurrent();

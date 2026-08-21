@@ -33,6 +33,7 @@ private:
 	GIFPackedRegHandler m_fpGIFPackedRegHandlerXYZ[8][4] = {};
 
 	void CheckFlushes();
+	void DiscardPendingDraw();
 
 	void GIFPackedRegHandlerNull(const GIFPackedReg* RESTRICT r);
 	void GIFPackedRegHandlerRGBA(const GIFPackedReg* RESTRICT r);
@@ -259,6 +260,7 @@ public:
 	bool m_temp_z_full_copy = false;
 	bool m_in_target_draw = false;
 	bool m_channel_shuffle_finish = false;
+	bool m_rendering_enabled = true;
 
 	u32 m_target_offset = 0;
 	u8 m_scanmask_used = 0;
@@ -440,6 +442,8 @@ public:
 
 	virtual void Reset(bool hardware_reset);
 	virtual void UpdateSettings(const Pcsx2Config::GSOptions& old_config);
+	void SetRenderingEnabled(bool enabled);
+	bool IsRenderingEnabled() const { return m_rendering_enabled; }
 
 	void Flush(GSFlushReason reason);
 	u32 CalcMask(int exp, int max_exp);

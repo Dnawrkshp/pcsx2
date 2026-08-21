@@ -15,6 +15,7 @@ private:
 	void EndPresentFrame();
 
 	u64 m_shader_time_start = 0;
+	std::unique_ptr<GSTexture> m_frame_buffer_rt_texture;
 
 	std::string m_snapshot;
 	u32 m_dump_frames = 0;

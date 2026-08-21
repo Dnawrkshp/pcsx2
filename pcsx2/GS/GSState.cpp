@@ -19,8 +19,6 @@
 #include <iomanip>
 #include <bit>
 
-extern int g_disable_rendering;
-
 u64 GSState::s_n = 0;
 u64 GSState::s_last_transfer_draw_n = 0;
 u64 GSState::s_transfer_n = 0;
@@ -946,6 +944,9 @@ void GSState::GIFPackedRegHandlerUV_Hack(const GIFPackedReg* RESTRICT r)
 template <u32 prim, u32 adc, bool auto_flush>
 void GSState::GIFPackedRegHandlerXYZF2(const GIFPackedReg* RESTRICT r)
 {
+	if (!m_rendering_enabled)
+		return;
+
 	const bool skip = adc || r->XYZF2.Skip();
 
 	if (!skip || GSUtil::GetPrimClass(m_prev_env.PRIM.PRIM) != GSUtil::GetPrimClass(m_env.PRIM.PRIM) || (m_dirty_gs_regs & (1 << DIRTY_REG_XYOFFSET)))
@@ -965,6 +966,9 @@ void GSState::GIFPackedRegHandlerXYZF2(const GIFPackedReg* RESTRICT r)
 template <u32 prim, u32 adc, bool auto_flush>
 void GSState::GIFPackedRegHandlerXYZ2(const GIFPackedReg* RESTRICT r)
 {
+	if (!m_rendering_enabled)
+		return;
+
 	const bool skip = adc || r->XYZ2.Skip();
 
 	if (!skip || GSUtil::GetPrimClass(m_prev_env.PRIM.PRIM) != GSUtil::GetPrimClass(m_env.PRIM.PRIM) || (m_dirty_gs_regs & (1 << DIRTY_REG_XYOFFSET)))
@@ -997,6 +1001,11 @@ template <u32 prim, bool auto_flush>
 void GSState::GIFPackedRegHandlerSTQRGBAXYZF2(const GIFPackedReg* RESTRICT r, u32 size)
 {
 	pxAssert(size > 0 && size % 3 == 0);
+	if (!m_rendering_enabled)
+	{
+		m_q = r[size - 3].STQ.Q;
+		return;
+	}
 
 	CheckFlushes();
 
@@ -1031,6 +1040,11 @@ template <u32 prim, bool auto_flush>
 void GSState::GIFPackedRegHandlerSTQRGBAXYZ2(const GIFPackedReg* RESTRICT r, u32 size)
 {
 	pxAssert(size > 0 && size % 3 == 0);
+	if (!m_rendering_enabled)
+	{
+		m_q = r[size - 3].STQ.Q;
+		return;
+	}
 
 	CheckFlushes();
 
@@ -1140,6 +1154,9 @@ void GSState::GIFRegHandlerUV_Hack(const GIFReg* RESTRICT r)
 template <u32 prim, u32 adc, bool auto_flush>
 void GSState::GIFRegHandlerXYZF2(const GIFReg* RESTRICT r)
 {
+	if (!m_rendering_enabled)
+		return;
+
 	if (!adc || GSUtil::GetPrimClass(m_prev_env.PRIM.PRIM) != GSUtil::GetPrimClass(m_env.PRIM.PRIM) || (m_dirty_gs_regs & (1 << DIRTY_REG_XYOFFSET)))
 		CheckFlushes();
 
@@ -1155,6 +1172,9 @@ void GSState::GIFRegHandlerXYZF2(const GIFReg* RESTRICT r)
 template <u32 prim, u32 adc, bool auto_flush>
 void GSState::GIFRegHandlerXYZ2(const GIFReg* RESTRICT r)
 {
+	if (!m_rendering_enabled)
+		return;
+
 	if (!adc || GSUtil::GetPrimClass(m_prev_env.PRIM.PRIM) != GSUtil::GetPrimClass(m_env.PRIM.PRIM) || (m_dirty_gs_regs & (1 << DIRTY_REG_XYOFFSET)))
 		CheckFlushes();
 
@@ -2007,8 +2027,39 @@ u32 GSState::CalcMask(int exp, int max_exp)
 	return (1 << std::min(amount, 23)) - 1;
 }
 
+void GSState::DiscardPendingDraw()
+{
+	m_index.tail = 0;
+	m_vertex.head = 0;
+	m_vertex.tail = 0;
+	m_vertex.next = 0;
+	m_vertex.xy_tail = 0;
+	temp_draw_rect = GSVector4i::zero();
+	m_drawlist.clear();
+	m_drawlist_bbox.clear();
+	m_quad_check_valid = false;
+	m_quad_check_valid_shuffle = false;
+	m_primitive_covers_without_gaps = NoGapsType::Uninitialized;
+	m_draw_transfers.clear();
+}
+
+void GSState::SetRenderingEnabled(bool enabled)
+{
+	if (m_rendering_enabled == enabled)
+		return;
+
+	DiscardPendingDraw();
+	m_rendering_enabled = enabled;
+}
+
 void GSState::FlushPrim()
 {
+	if (!m_rendering_enabled)
+	{
+		DiscardPendingDraw();
+		return;
+	}
+
 	if (m_index.tail > 0)
 	{
 		GL_REG("FlushPrim ctxt %d", PRIM->CTXT);
@@ -2148,7 +2199,7 @@ void GSState::FlushPrim()
 				DumpTransferImages();
 		}
 
-		if (!skip_draw && !g_disable_rendering)
+		if (!skip_draw)
 			Draw();
 
 		g_perfmon.Put(GSPerfMon::Draw, 1);
@@ -4995,6 +5046,8 @@ __forceinline void GSState::VertexKick(u32 skip)
 {
 	constexpr u32 n = NumIndicesForPrim(prim);
 	static_assert(n > 0);
+	if (!m_rendering_enabled)
+		return;
 
 	pxAssert(m_vertex.tail < m_vertex.maxcount + 3);
 

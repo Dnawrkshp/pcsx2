@@ -9,6 +9,7 @@
 #include "PINE.h"
 #include "VMManager.h"
 #include "SPU2/spu2.h"
+#include "GS/GS.h"
 
 #include <atomic>
 #include <cstdio>
@@ -80,7 +81,6 @@ extern u8 FRAME_BUFFER_COPY[];
 extern bool g_eeRecExecuting;
 
 int g_pine_slot = 0;
-int g_disable_rendering = 0;
 int reset = 0;
 time_t g_pine_last_recv_seconds;
 time_t g_pine_last_connection;
@@ -212,7 +212,7 @@ namespace PINEServer
 	enum DynamicSettingId : unsigned char
 	{
 		DynamicSettingFrameSleepWait = 0, /**< If true, FrameStep sleeps while waiting for next frame command. */
-		DynamicSettingDisableRendering = 1, /**< If true, Renderer is set to NULL. */
+		DynamicSettingDisableRendering = 1, /**< If true, primitive rendering and presentation are skipped. */
 		DynamicSettingReloadConfig = 2, /**< Reloads PCSX2 config file */
 		DynamicSettingResetSocket = 3, /**< Resets the PINE socket */
 		DynamicSettingSetVolume = 4, /**< Sets the output volume */
@@ -944,7 +944,7 @@ PINEServer::IPCBuffer PINEServer::ParseCommand(std::span<u8> buf, std::vector<u8
 					case DynamicSettingDisableRendering:
 					{
 						const u8 value = FromSpan<u8>(buf, buf_cnt + 1);
-						g_disable_rendering = value != 0;
+						GSRequestRenderingEnabled(value == 0);
 						buf_cnt += 1;
 						break;
 					}

@@ -91,7 +91,8 @@ void GSRendererSW::VSync(u32 field, bool registers_written, bool idle_frame)
 
 	GSRenderer::VSync(field, registers_written, idle_frame);
 
-	m_tc->IncAge();
+	if (IsRenderingEnabled())
+		m_tc->IncAge();
 
 	m_draw_transfers.clear();
 	// if ((m_perfmon.GetFrame() & 255) == 0) m_rl->PrintStats();

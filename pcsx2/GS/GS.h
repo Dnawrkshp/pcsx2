@@ -87,6 +87,10 @@ void GSResizeDisplayWindow(u32 width, u32 height, float scale);
 void GSUpdateDisplayWindow();
 void GSSetVSyncMode(GSVSyncMode mode, bool allow_present_throttle);
 
+// Rendering can be disabled without closing or recreating the GS renderer. Requests may be
+// made from any thread and are applied at the next GS packet boundary.
+void GSRequestRenderingEnabled(bool enabled);
+
 GSRendererType GSGetCurrentRenderer();
 bool GSIsHardwareRenderer();
 std::string GetDefaultAdapter();

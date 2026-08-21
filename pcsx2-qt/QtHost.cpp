@@ -210,6 +210,11 @@ void EmuThread::startVM(std::shared_ptr<VMBootParameters> boot_params)
 		return;
 	}
 
+	// No-GUI operation never needs a host presentation surface. Keeping the device
+	// surfaceless still permits offscreen rendering and framebuffer readback.
+	if (Host::InNoGUIMode())
+		m_is_surfaceless = true;
+
 	// Determine whether to start fullscreen or not.
 	m_is_rendering_to_main = shouldRenderToMain();
 	if (boot_params->fullscreen.has_value())
@@ -516,6 +521,9 @@ void EmuThread::setFullscreen(bool fullscreen, bool allow_render_to_main)
 
 void EmuThread::setSurfaceless(bool surfaceless)
 {
+	if (!surfaceless && Host::InNoGUIMode())
+		return;
+
 	if (!isOnEmuThread())
 	{
 		QMetaObject::invokeMethod(this, "setSurfaceless", Qt::QueuedConnection, Q_ARG(bool, surfaceless));
@@ -965,7 +973,7 @@ void Host::OnGameChanged(const std::string& title, const std::string& elf_overri
 
 void EmuThread::updatePerformanceMetrics(bool force)
 {
-	if (!g_main_window)
+	if (!g_main_window || Host::InNoGUIMode())
 		return;
 
 	if (VMManager::HasValidVM())
