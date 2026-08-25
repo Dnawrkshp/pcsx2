@@ -66,6 +66,11 @@ static bool LoadGLADEGL(EGLDisplay display, Error* error)
 	return true;
 }
 
+static bool SupportsSurfacelessContext()
+{
+	return GLAD_EGL_VERSION_1_5 || GLAD_EGL_KHR_surfaceless_context;
+}
+
 GLContextEGL::GLContextEGL(const WindowInfo& wi)
 	: GLContext(wi)
 {
@@ -112,7 +117,7 @@ bool GLContextEGL::Initialize(std::span<const Version> versions_to_try, Error* e
 	if (!LoadGLADEGL(m_display, error))
 		return false;
 
-	if (!GLAD_EGL_KHR_surfaceless_context)
+	if (!SupportsSurfacelessContext())
 		Console.Warning("EGL implementation does not support surfaceless contexts, emulating with pbuffers");
 
 	for (const Version& cv : versions_to_try)
@@ -340,7 +345,7 @@ bool GLContextEGL::CreateSurface()
 {
 	if (m_wi.type == WindowInfo::Type::Surfaceless)
 	{
-		if (GLAD_EGL_KHR_surfaceless_context)
+		if (SupportsSurfacelessContext())
 			return true;
 		else
 			return CreatePBufferSurface();
@@ -436,11 +441,15 @@ void GLContextEGL::DestroySurface()
 bool GLContextEGL::CreateContext(const Version& version, EGLContext share_context)
 {
 	DevCon.WriteLnFmt("Trying GL version {}.{}", version.major_version, version.minor_version);
+	EGLint surface_type = EGL_WINDOW_BIT;
+	if (m_wi.type == WindowInfo::Type::Surfaceless)
+		surface_type = SupportsSurfacelessContext() ? 0 : EGL_PBUFFER_BIT;
+
 	const int surface_attribs[] = {
 		EGL_RENDERABLE_TYPE,
 		EGL_OPENGL_BIT,
 		EGL_SURFACE_TYPE,
-		(m_wi.type != WindowInfo::Type::Surfaceless) ? EGL_WINDOW_BIT : 0,
+		surface_type,
 		EGL_RED_SIZE, 8, EGL_GREEN_SIZE, 8,
 		EGL_BLUE_SIZE, 8, EGL_NONE, 0};
 
